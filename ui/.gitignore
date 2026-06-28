@@ -1,0 +1,6 @@
+dist/
+node_modules/
+*.tsbuildinfo
+*.tgz
+vite.config.d.ts
+vite.config.js
