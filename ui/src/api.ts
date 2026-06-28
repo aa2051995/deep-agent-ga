@@ -1,4 +1,12 @@
-import type { ProtocolEvent, ProtocolResponse, RunDebugSnapshot, RunSummary, ThreadSummary } from "./types";
+import type {
+  PersistedMessage,
+  ProtocolResponse,
+  RunCheckpointSnapshot,
+  RunSummary,
+  SubagentCard,
+  ThreadSummary,
+  TodoItem,
+} from "./types";
 import { logger } from "./logger";
 
 export const DEFAULT_API_URL = "http://localhost:2024";
@@ -27,10 +35,13 @@ type RunApiItem = {
   updated_at?: string;
 };
 
-type RunDebugApiItem = {
+type RunCheckpointApiItem = {
   run?: RunApiItem;
   values?: unknown;
-  events?: unknown;
+  messages?: unknown;
+  todos?: unknown;
+  subagents?: unknown;
+  checkpoints?: unknown;
 };
 
 function textFromContent(content: unknown): string {
@@ -143,6 +154,50 @@ function runSummary(run: RunApiItem): RunSummary | null {
   };
 }
 
+function recordValue(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function persistedMessage(value: unknown): PersistedMessage | null {
+  const raw = recordValue(value);
+  if (typeof raw.type !== "string") {
+    return null;
+  }
+  return {
+    id: typeof raw.id === "string" ? raw.id : crypto.randomUUID(),
+    type: raw.type,
+    content: raw.content,
+    name: typeof raw.name === "string" ? raw.name : null,
+    additional_kwargs: recordValue(raw.additional_kwargs),
+    response_metadata: recordValue(raw.response_metadata),
+  };
+}
+
+function todoItem(value: unknown, index: number): TodoItem | null {
+  const raw = recordValue(value);
+  const content = raw.content ?? raw.title ?? raw.task ?? raw.description;
+  if (typeof content !== "string" || !content.trim()) {
+    return null;
+  }
+  const status = raw.status === "completed" || raw.status === "in_progress" ? raw.status : "pending";
+  return {
+    id: typeof raw.id === "string" ? raw.id : `todo-${index}`,
+    content,
+    agent: typeof raw.agent === "string" ? raw.agent : undefined,
+    status,
+  };
+}
+
+function subagentCard(value: unknown): SubagentCard | null {
+  const raw = recordValue(value);
+  if (typeof raw.key !== "string" || typeof raw.name !== "string") {
+    return null;
+  }
+  return raw as unknown as SubagentCard;
+}
+
 export async function listRuns(apiUrl: string, threadId: string): Promise<RunSummary[]> {
   logger.info("api.runs.list.start", { threadId });
   const response = await fetch(`${apiUrl}/threads/${threadId}/runs?limit=100`);
@@ -158,29 +213,52 @@ export async function listRuns(apiUrl: string, threadId: string): Promise<RunSum
   return runs;
 }
 
-export async function getRunDebugSnapshot(
+export async function getRunCheckpointSnapshot(
   apiUrl: string,
   threadId: string,
   runId: string,
-): Promise<RunDebugSnapshot> {
-  logger.info("api.runs.debug.start", { threadId, runId });
-  const response = await fetch(`${apiUrl}/threads/${threadId}/runs/${runId}/debug`);
+): Promise<RunCheckpointSnapshot> {
+  logger.info("api.runs.checkpoints.start", { threadId, runId });
+  const response = await fetch(`${apiUrl}/threads/${threadId}/runs/${runId}/checkpoints`);
   if (!response.ok) {
-    logger.error("api.runs.debug.failed", { threadId, runId, status: response.status });
-    throw new Error(`Failed to load run debug: ${response.statusText}`);
+    logger.error("api.runs.checkpoints.failed", { threadId, runId, status: response.status });
+    throw new Error(`Failed to load run checkpoints: ${response.statusText}`);
   }
-  const body = (await response.json()) as RunDebugApiItem;
+  const body = (await response.json()) as RunCheckpointApiItem;
   const run = body.run ? runSummary(body.run) : null;
   if (run === null) {
-    throw new Error("Run debug response did not include a valid run.");
+    throw new Error("Run checkpoints response did not include a valid run.");
   }
-  const values =
-    typeof body.values === "object" && body.values !== null && !Array.isArray(body.values)
-      ? (body.values as Record<string, unknown>)
-      : {};
-  const events = Array.isArray(body.events) ? (body.events as ProtocolEvent[]) : [];
-  logger.info("api.runs.debug.complete", { threadId, runId, events: events.length });
-  return { run, values, events };
+  const values = recordValue(body.values);
+  const messages = Array.isArray(body.messages)
+    ? body.messages.map(persistedMessage).filter((message): message is PersistedMessage => message !== null)
+    : [];
+  const todos = Array.isArray(body.todos)
+    ? body.todos.map(todoItem).filter((todo): todo is TodoItem => todo !== null)
+    : [];
+  const subagents = Array.isArray(body.subagents)
+    ? body.subagents.map(subagentCard).filter((subagent): subagent is SubagentCard => subagent !== null)
+    : [];
+  const checkpoints = Array.isArray(body.checkpoints)
+    ? body.checkpoints.map((checkpoint) => {
+        const raw = recordValue(checkpoint);
+        return {
+          checkpoint: recordValue(raw.checkpoint),
+          parent_checkpoint: raw.parent_checkpoint == null ? null : recordValue(raw.parent_checkpoint),
+          metadata: recordValue(raw.metadata),
+          next: Array.isArray(raw.next) ? raw.next.map(String) : [],
+          created_at: typeof raw.created_at === "string" ? raw.created_at : null,
+        };
+      })
+    : [];
+  logger.info("api.runs.checkpoints.complete", {
+    threadId,
+    runId,
+    messages: messages.length,
+    subagents: subagents.length,
+    checkpoints: checkpoints.length,
+  });
+  return { run, values, messages, todos, subagents, checkpoints };
 }
 
 export async function createThread(apiUrl: string): Promise<string> {

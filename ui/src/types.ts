@@ -98,10 +98,28 @@ export type RunSummary = {
   updatedAt: string;
 };
 
-export type RunDebugSnapshot = {
+export type PersistedMessage = {
+  id: string;
+  type: string;
+  content: unknown;
+  name?: string | null;
+  additional_kwargs?: Record<string, unknown>;
+  response_metadata?: Record<string, unknown>;
+};
+
+export type RunCheckpointSnapshot = {
   run: RunSummary;
   values: Record<string, unknown>;
-  events: ProtocolEvent[];
+  messages: PersistedMessage[];
+  todos: TodoItem[];
+  subagents: SubagentCard[];
+  checkpoints: Array<{
+    checkpoint: Record<string, unknown>;
+    parent_checkpoint: Record<string, unknown> | null;
+    metadata: Record<string, unknown>;
+    next: string[];
+    created_at: string | null;
+  }>;
 };
 
 export type ThreadSummary = {

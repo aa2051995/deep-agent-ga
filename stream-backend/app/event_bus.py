@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from collections import defaultdict
 from dataclasses import dataclass
@@ -10,6 +11,8 @@ from urllib.parse import unquote, urlparse
 
 from .models import EventParams, ProtocolEvent, RunRecord, ThreadRecord, ThreadState, now_ms
 from .store import Repository
+
+logger = logging.getLogger("stream_backend.event_bus")
 
 
 class EventSubscription(Protocol):
@@ -59,6 +62,7 @@ class InMemoryEventBroker:
         self._lock = asyncio.Lock()
 
     async def setup(self) -> None:
+        logger.info("event_broker.memory.ready prefix=%s", self.prefix)
         return None
 
     async def close(self) -> None:
@@ -94,6 +98,14 @@ class InMemoryEventBroker:
             if len(events) > 1000:
                 del events[:-1000]
             subscribers = list(self._subscribers.get(stream_name, ()))
+        logger.info(
+            "event_broker.memory.append thread_id=%s seq=%s method=%s namespace=%s subscribers=%s",
+            thread_id,
+            event.seq,
+            method,
+            namespace or [],
+            len(subscribers),
+        )
         for queue in subscribers:
             queue.put_nowait(event)
         return event
@@ -165,11 +177,13 @@ class RabbitMQStreamSubscription:
         consumer: Any,
         subscriber_id: int,
         events: asyncio.Queue[ProtocolEvent],
+        broker: "RabbitMQStreamBroker",
     ) -> None:
         self.stream_name = stream_name
         self._consumer = consumer
         self._subscriber_id = subscriber_id
         self._events = events
+        self._broker = broker
         self._closed = False
 
     async def next_event(self, timeout: float) -> ProtocolEvent:
@@ -179,7 +193,11 @@ class RabbitMQStreamSubscription:
         if self._closed:
             return
         self._closed = True
-        await self._consumer.unsubscribe(self._subscriber_id)
+        try:
+            await self._consumer.unsubscribe(self._subscriber_id)
+        finally:
+            await self._consumer.close()
+            self._broker.discard_subscription_consumer(self._consumer)
 
 
 class RabbitMQStreamBroker:
@@ -195,13 +213,13 @@ class RabbitMQStreamBroker:
         self.prefix = prefix
         self.stream_max_length_bytes = stream_max_length_bytes
         self._producer: Any = None
-        self._consumer: Any = None
+        self._subscription_consumers: list[Any] = []
         self._declared: set[str] = set()
         self._lock = asyncio.Lock()
 
     async def setup(self) -> None:
         try:
-            from rstream import Consumer, Producer
+            from rstream import Producer
         except Exception as exc:  # pragma: no cover - depends on optional dependency
             raise RuntimeError(
                 "Install rstream to use STREAM_BACKEND_EVENT_BROKER=rabbitmq."
@@ -215,22 +233,28 @@ class RabbitMQStreamBroker:
             vhost=self.settings.vhost,
             connection_name="langgraphjs-stream-backend-producer",
         )
-        self._consumer = Consumer(
-            host=self.settings.host,
-            port=self.settings.port,
-            username=self.settings.username,
-            password=self.settings.password,
-            vhost=self.settings.vhost,
-            connection_name="langgraphjs-stream-backend-consumer",
-        )
         await self._producer.start()
-        await self._consumer.start()
+        logger.info(
+            "event_broker.rabbitmq.ready host=%s port=%s vhost=%s prefix=%s",
+            self.settings.host,
+            self.settings.port,
+            self.settings.vhost,
+            self.prefix,
+        )
+        print(f"RabbitMQ Stream broker connected to {self.settings.host}:{self.settings.port} vhost={self.settings.vhost}")
 
     async def close(self) -> None:
-        if self._consumer is not None:
-            await self._consumer.close()
+        consumers = list(self._subscription_consumers)
+        self._subscription_consumers.clear()
+        for consumer in consumers:
+            await consumer.close()
         if self._producer is not None:
             await self._producer.close()
+
+    def discard_subscription_consumer(self, consumer: Any) -> None:
+        self._subscription_consumers = [
+            item for item in self._subscription_consumers if item is not consumer
+        ]
 
     def stream_name(self, thread_id: str) -> str:
         safe_thread_id = "".join(
@@ -243,6 +267,7 @@ class RabbitMQStreamBroker:
         if self._producer is None:
             raise RuntimeError("RabbitMQStreamBroker.setup() was not called.")
         stream_name = self.stream_name(thread_id)
+        # print(f"Ensuring RabbitMQ stream exists: {stream_name}")
         async with self._lock:
             if stream_name in self._declared:
                 return stream_name
@@ -305,12 +330,14 @@ class RabbitMQStreamBroker:
         node: str | None = None,
     ) -> ProtocolEvent:
         if self._producer is None:
+            print("RabbitMQStreamBroker.setup() was not called.")
             raise RuntimeError("RabbitMQStreamBroker.setup() was not called.")
         try:
             from rstream import AMQPMessage
         except Exception as exc:  # pragma: no cover - depends on optional dependency
+            print("rstream is required for RabbitMQ publishing.")
             raise RuntimeError("rstream is required for RabbitMQ publishing.") from exc
-
+        # print(f"Appending event to RabbitMQ stream: thread_id={thread_id} method={method} namespace={namespace} node={node}")
         stream_name = await self._ensure_stream(thread_id)
         body = self._payload_bytes(method, data, namespace, node)
         message = AMQPMessage(
@@ -342,15 +369,25 @@ class RabbitMQStreamBroker:
             await subscription.close()
 
     async def subscribe(self, thread_id: str, since: int | None = None) -> RabbitMQStreamSubscription:
-        if self._consumer is None:
+        if self._producer is None:
             raise RuntimeError("RabbitMQStreamBroker.setup() was not called.")
         try:
-            from rstream import ConsumerOffsetSpecification, OffsetType, amqp_decoder
+            from rstream import Consumer, ConsumerOffsetSpecification, OffsetType, amqp_decoder
         except Exception as exc:  # pragma: no cover - depends on optional dependency
             raise RuntimeError("rstream is required for RabbitMQ subscriptions.") from exc
 
         stream_name = await self._ensure_stream(thread_id)
         events: asyncio.Queue[ProtocolEvent] = asyncio.Queue(maxsize=1000)
+        consumer = Consumer(
+            host=self.settings.host,
+            port=self.settings.port,
+            username=self.settings.username,
+            password=self.settings.password,
+            vhost=self.settings.vhost,
+            connection_name=f"langgraphjs-stream-backend-consumer-{thread_id}",
+        )
+        await consumer.start()
+        self._subscription_consumers.append(consumer)
 
         async def on_message(message: Any, context: Any) -> None:
             body = message if isinstance(message, bytes) else message.body
@@ -362,14 +399,19 @@ class RabbitMQStreamBroker:
         else:
             offset_specification = ConsumerOffsetSpecification(OffsetType.OFFSET, since + 1)
 
-        subscriber_id = await self._consumer.subscribe(
-            stream_name,
-            on_message,
-            decoder=amqp_decoder,
-            offset_specification=offset_specification,
-            initial_credit=100,
-        )
-        return RabbitMQStreamSubscription(stream_name, self._consumer, subscriber_id, events)
+        try:
+            subscriber_id = await consumer.subscribe(
+                stream_name,
+                on_message,
+                decoder=amqp_decoder,
+                offset_specification=offset_specification,
+                initial_credit=100,
+            )
+        except Exception:
+            await consumer.close()
+            self.discard_subscription_consumer(consumer)
+            raise
+        return RabbitMQStreamSubscription(stream_name, consumer, subscriber_id, events, self)
 
 
 class PublishingRepository:
@@ -439,6 +481,14 @@ class PublishingRepository:
         node: str | None = None,
     ) -> ProtocolEvent:
         event = await self.inner.append_event(thread_id, method, data, namespace, node)
+        # logger.info(
+        #     "event.publish.persisted thread_id=%s seq=%s method=%s namespace=%s node=%s",
+        #     thread_id,
+        #     event.seq,
+        #     method,
+        #     namespace or [],
+        #     node,
+        # )
         await self.broker.append_event(thread_id, method, data, namespace, node)
         return event
 
@@ -460,6 +510,12 @@ def create_event_broker() -> EventBroker:
         or "memory"
     ).lower()
     prefix = os.getenv("STREAM_BACKEND_RABBITMQ_PREFIX", "langgraphjs.stream")
+    if mode not in {"memory", "rabbitmq"}:
+        logger.warning(
+            "event_broker.create.invalid_mode mode=%s fallback=memory",
+            mode,
+        )
+        mode = "memory"
     if mode == "rabbitmq":
         url = (
             os.getenv("RABBITMQ_STREAM_URL")
@@ -467,9 +523,11 @@ def create_event_broker() -> EventBroker:
             or "http://localhost:5552/"
         )
         max_length = os.getenv("STREAM_BACKEND_RABBITMQ_STREAM_MAX_BYTES")
+        logger.info("event_broker.create mode=rabbitmq prefix=%s url=%s", prefix, url)
         return RabbitMQStreamBroker(
             settings=parse_rabbitmq_stream_url(url),
             prefix=prefix,
             stream_max_length_bytes=int(max_length) if max_length else None,
         )
+    logger.info("event_broker.create mode=memory prefix=%s", prefix)
     return InMemoryEventBroker(prefix=prefix)

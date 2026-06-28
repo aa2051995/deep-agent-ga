@@ -1,0 +1,49 @@
+images:
+  apiServerImage:
+    pullPolicy: IfNotPresent
+    repository: 553138586148.dkr.ecr.eu-north-1.amazonaws.com/deep-research
+    tag: latest
+# Example configuration for low reads, high writes (5 read/500 write requests per second)
+api:
+  replicas: 2
+  resources:
+    requests:
+      cpu: "2"
+      memory: "2Gi"
+    limits:
+      cpu: "2"
+      memory: "4Gi"
+
+queue:
+  replicas: 2
+  resources:
+    requests:
+      cpu: "2"
+      memory: "2Gi"
+    limits:
+      cpu: "2"
+      memory: "4Gi"
+
+config:
+  numberOfJobsPerWorker: 5
+
+redis:
+  resources:
+    requests:
+      memory: "2Gi"
+    limits:
+      memory: "2Gi"
+
+postgres:
+  statefulSet:
+    persistence:
+      enabled: true
+      storageClassName: ebs-gp3
+      size: 8Gi
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"

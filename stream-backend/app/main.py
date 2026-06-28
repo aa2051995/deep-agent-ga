@@ -23,6 +23,7 @@ from .models import (
     ProtocolError,
     ProtocolEvent,
     ProtocolSuccess,
+    RunRecord,
     ThreadHistoryRequest,
     ThreadRecord,
     ThreadState,
@@ -97,6 +98,9 @@ def configure_logging() -> None:
     root.addHandler(handler)
     root.addHandler(file_handler)
     root.setLevel(level)
+    library_level = os.getenv("STREAM_BACKEND_LIBRARY_LOG_LEVEL", "WARNING").upper()
+    for name in ("rstream", "rstream.client"):
+        logging.getLogger(name).setLevel(library_level)
 
 
 configure_logging()
@@ -138,6 +142,9 @@ os.environ["STREAM_BACKEND_POSTGRES_URI"] = "postgresql://postgres:am12345Eee@lo
 os.environ["RESEARCH_AGENT_MODEL"] = "gemini-2.5-pro"  # --- IGNORE ---
 os.environ["TAVILY_API_KEY"] = "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"
 os.environ["GOOGLE_API_KEY"] = "AIzaSyBx0JdmhyXdoufg23j2Ec69ej968-LSymU"  # --- IGNORE ---
+os.environ["STREAM_BACKEND_EVENT_BROKER"] = "rabbitmq"
+os.environ["RABBITMQ_STREAM_URL"] = "rabbitmq-stream://guest:guest@localhost:5552/"
+
 base_repo = create_repository()
 event_broker = create_event_broker()
 repo = PublishingRepository(base_repo, event_broker)
@@ -525,6 +532,175 @@ def select_run_workflow(events: list[ProtocolEvent]) -> list[dict[str, Any]]:
     return workflow
 
 
+def state_run_id(state: ThreadState) -> str | None:
+    run_id = state.metadata.get("run_id")
+    return run_id if isinstance(run_id, str) else None
+
+
+def is_root_checkpoint(state: ThreadState) -> bool:
+    return state.checkpoint.checkpoint_ns in {"", None}
+
+
+def state_messages(state: ThreadState) -> list[dict[str, Any]]:
+    values = state.values if isinstance(state.values, dict) else {}
+    messages = values.get("messages")
+    return messages if isinstance(messages, list) else []
+
+
+def message_content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    text = ""
+    for block in content:
+        if isinstance(block, str):
+            text += block
+        elif isinstance(block, dict) and block.get("type") == "text":
+            text += str(block.get("text") or "")
+    return text
+
+
+def normalized_message(message: Any) -> dict[str, Any] | None:
+    if not isinstance(message, dict):
+        return None
+    msg_type = message.get("type")
+    if msg_type not in {"human", "ai", "system"}:
+        return None
+    text = message_content_text(message.get("content")).strip()
+    tool_calls = message.get("tool_calls")
+    if not text and msg_type == "ai" and isinstance(tool_calls, list):
+        return None
+    if not text and msg_type != "human":
+        return None
+    return {
+        "id": str(message.get("id") or new_id()),
+        "type": msg_type,
+        "content": message.get("content"),
+        "name": message.get("name"),
+        "additional_kwargs": message.get("additional_kwargs") if isinstance(message.get("additional_kwargs"), dict) else {},
+        "response_metadata": message.get("response_metadata") if isinstance(message.get("response_metadata"), dict) else {},
+    }
+
+
+def parse_tool_args(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {"input": value}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def tool_call_id(message: dict[str, Any]) -> str | None:
+    for key in ("tool_call_id", "toolCallId", "id"):
+        value = message.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def project_subagents(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    outputs: dict[str, dict[str, Any]] = {}
+    for message in messages:
+        if not isinstance(message, dict) or message.get("type") != "tool":
+            continue
+        call_id = tool_call_id(message)
+        if call_id:
+            outputs[call_id] = message
+
+    subagents: list[dict[str, Any]] = []
+    for message in messages:
+        if not isinstance(message, dict) or message.get("type") != "ai":
+            continue
+        tool_calls = message.get("tool_calls")
+        if not isinstance(tool_calls, list):
+            continue
+        for call in tool_calls:
+            if not isinstance(call, dict) or call.get("name") != "task":
+                continue
+            call_id = str(call.get("id") or new_id())
+            args = parse_tool_args(call.get("args"))
+            output = outputs.get(call_id)
+            output_text = message_content_text(output.get("content")) if output else ""
+            subagents.append(
+                {
+                    "key": f"tools:{call_id}",
+                    "name": str(args.get("subagent_type") or "subagent"),
+                    "namespace": [f"tools:{call_id}"],
+                    "status": "done" if output else "running",
+                    "description": str(args.get("description") or args.get("input") or "Subagent task"),
+                    "progress": 100 if output else 35,
+                    "messages": [
+                        {
+                            "id": f"{call_id}-input",
+                            "role": "human",
+                            "content": str(args.get("description") or args.get("input") or ""),
+                            "componentKey": f"tools:{call_id}",
+                            "namespace": [f"tools:{call_id}"],
+                            "status": "done",
+                        },
+                        {
+                            "id": f"{call_id}-output",
+                            "role": "ai",
+                            "content": output_text,
+                            "componentKey": f"tools:{call_id}",
+                            "namespace": [f"tools:{call_id}"],
+                            "status": "done" if output else "streaming",
+                        },
+                    ],
+                    "tools": [],
+                }
+            )
+    return subagents
+
+
+def project_run_checkpoints(run: RunRecord, history: list[ThreadState]) -> dict[str, Any]:
+    root_history = [state for state in reversed(history) if is_root_checkpoint(state)]
+    run_states = [state for state in root_history if state_run_id(state) == run.run_id]
+    latest = run_states[-1] if run_states else None
+    first = run_states[0] if run_states else None
+    previous_count = 0
+    if first and first.parent_checkpoint:
+        parent_id = first.parent_checkpoint.checkpoint_id
+        parent = next(
+            (state for state in root_history if state.checkpoint.checkpoint_id == parent_id),
+            None,
+        )
+        previous_count = len(state_messages(parent)) if parent else 0
+    elif first:
+        previous_count = max(len(state_messages(first)) - 1, 0)
+
+    all_messages = state_messages(latest) if latest else []
+    run_messages = all_messages[previous_count:]
+    visible_messages = [
+        message
+        for message in (normalized_message(message) for message in run_messages)
+        if message is not None
+    ]
+    values = latest.values if latest and isinstance(latest.values, dict) else {}
+    return {
+        "run": run.model_dump(),
+        "values": values,
+        "messages": visible_messages,
+        "todos": values.get("todos") if isinstance(values.get("todos"), list) else [],
+        "subagents": project_subagents(run_messages),
+        "checkpoints": [
+            {
+                "checkpoint": state.checkpoint.model_dump(),
+                "parent_checkpoint": state.parent_checkpoint.model_dump() if state.parent_checkpoint else None,
+                "metadata": state.metadata,
+                "next": state.next,
+                "created_at": state.created_at,
+            }
+            for state in run_states
+        ],
+    }
+
+
 async def list_debug_source_events(thread_id: str) -> list[ProtocolEvent]:
     events: list[ProtocolEvent] = []
     seen: set[str] = set()
@@ -580,14 +756,14 @@ async def stream_thread_events(
             yield ": heartbeat\n\n"
             continue
         if event_filter.matches(event):
-            logger.debug(
-                "thread.stream.event thread_id=%s run_id=%s seq=%s method=%s namespace=%s",
-                thread_id,
-                run_id,
-                event.seq,
-                event.method,
-                event.params.namespace,
-            )
+            # logger.debug(
+            #     "thread.stream.event thread_id=%s run_id=%s seq=%s method=%s namespace=%s",
+            #     thread_id,
+            #     run_id,
+            #     event.seq,
+            #     event.method,
+            #     event.params.namespace,
+            # )
             frame = legacy_sse_frame(thread_id, event, stream_state)
             if frame is not None:
                 yield frame
@@ -753,17 +929,17 @@ async def protocol_events(thread_id: str, body: dict, request: Request) -> Strea
         )
         async for event in stream_manager.iter_events(managed, request):
             if event is None:
-                logger.debug("protocol.events.heartbeat thread_id=%s", thread_id)
+                # logger.debug("protocol.events.heartbeat thread_id=%s", thread_id)
                 yield ": heartbeat\n\n"
                 continue
             if event_filter.matches(event):
-                logger.debug(
-                    "protocol.events.emit thread_id=%s seq=%s method=%s namespace=%s",
-                    thread_id,
-                    event.seq,
-                    event.method,
-                    event.params.namespace,
-                )
+                # logger.debug(
+                #     "protocol.events.emit thread_id=%s seq=%s method=%s namespace=%s",
+                #     thread_id,
+                #     event.seq,
+                #     event.method,
+                #     event.params.namespace,
+                # )
                 yield sse_frame(event)
 
     return StreamingResponse(
@@ -882,7 +1058,7 @@ async def protocol_events_websocket(websocket: WebSocket, thread_id: str) -> Non
                     closed.set()
                 continue
             cursor = event.seq if cursor is None else max(cursor, event.seq)
-            logger.debug("protocol.websocket.emit thread_id=%s seq=%s method=%s", thread_id, event.seq, event.method)
+            # logger.debug("protocol.websocket.emit thread_id=%s seq=%s method=%s", thread_id, event.seq, event.method)
             await send_matching_events([event])
 
     receiver = asyncio.create_task(receive_loop())
@@ -935,24 +1111,52 @@ async def stream_stateful_run(thread_id: str, payload: dict, request: Request) -
     logger.info("runs.stream_stateful.start thread_id=%s", thread_id)
     before = await repo.list_events(thread_id)
     since = before[-1].seq if before else None
-    response = await service.handle_command(thread_id, run_payload_to_command(thread_id, payload))
+    command = run_payload_to_command(thread_id, payload)
+    response = await service.create_pending_run(thread_id, command)
     if isinstance(response, ProtocolError):
         raise HTTPException(status_code=400, detail=response.message)
     run_id = response.result["run_id"]
     logger.info("runs.stream_stateful.created thread_id=%s run_id=%s since=%s", thread_id, run_id, since)
+
+    async def event_iter() -> AsyncIterator[str]:
+        logger.info(
+            "runs.stream_stateful.subscribe_before_start thread_id=%s run_id=%s since=%s",
+            thread_id,
+            run_id,
+            since,
+        )
+        event_filter = RunStreamFilter(modes={"run_modes"}, run_id=run_id)
+        stream_state: dict[str, dict[str, dict[str, str]]] = {}
+        managed = await stream_manager.subscribe_thread(thread_id, since)
+        run = await repo.get_run(thread_id, run_id)
+        if run is None:
+            await managed.close()
+            raise HTTPException(status_code=404, detail="Run not found")
+        service.start_run_task(run, run.kwargs.get("input"))
+        async for event in stream_manager.iter_events(managed, request):
+            if event is None:
+                yield ": heartbeat\n\n"
+                continue
+            if event_filter.matches(event):
+                frame = legacy_sse_frame(thread_id, event, stream_state)
+                if frame is not None:
+                    yield frame
+            if event_filter.is_terminal(event):
+                logger.info(
+                    "runs.stream_stateful.terminal thread_id=%s run_id=%s seq=%s",
+                    thread_id,
+                    run_id,
+                    event.seq,
+                )
+                return
+
     headers = {
         "Cache-Control": "no-cache",
         "X-Accel-Buffering": "no",
         "Content-Location": f"/threads/{thread_id}/runs/{run_id}",
     }
     return StreamingResponse(
-        stream_thread_events(
-            thread_id,
-            request,
-            since=since,
-            run_id=run_id,
-            stop_on_terminal=True,
-        ),
+        event_iter(),
         media_type="text/event-stream",
         headers=headers,
     )
@@ -1038,6 +1242,25 @@ async def get_run(thread_id: str, run_id: str) -> dict:
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
     return run.model_dump()
+
+
+@app.get("/threads/{thread_id}/runs/{run_id}/checkpoints")
+async def get_run_checkpoints(thread_id: str, run_id: str, limit: int = 200) -> dict:
+    logger.info("runs.checkpoints.get thread_id=%s run_id=%s limit=%s", thread_id, run_id, limit)
+    run = await repo.get_run(thread_id, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    history = await repo.get_history(thread_id, limit=limit)
+    projection = project_run_checkpoints(run, history)
+    logger.info(
+        "runs.checkpoints.get.complete thread_id=%s run_id=%s checkpoints=%s messages=%s subagents=%s",
+        thread_id,
+        run_id,
+        len(projection["checkpoints"]),
+        len(projection["messages"]),
+        len(projection["subagents"]),
+    )
+    return projection
 
 
 @app.get("/threads/{thread_id}/runs/{run_id}/debug")

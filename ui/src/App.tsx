@@ -17,11 +17,11 @@ import {
 import type { Message } from "@langchain/langgraph-sdk";
 import type { SubagentStreamInterface } from "@langchain/langgraph-sdk/react";
 import { logger } from "./logger";
-import { deleteThread, getRunDebugSnapshot, listRuns, listThreads, renameThread } from "./api";
+import { deleteThread, getRunCheckpointSnapshot, listRuns, listThreads, renameThread } from "./api";
 import { DEFAULT_API_URL, messageText, toolCallArgs, toolCallName, useDeepResearchStream } from "./stream";
 import type { DebugEvent, DeepResearchStream } from "./stream";
 import { selectInputRequests, selectTodos, selectTodosFromValues, subagentStreamToCard } from "./selectors";
-import type { InputRequest, ProtocolEvent, RunDebugSnapshot, RunSummary, SubagentCard, ThreadSummary, TodoItem, ToolDebugRow } from "./types";
+import type { InputRequest, ProtocolEvent, RunCheckpointSnapshot, RunSummary, SubagentCard, ThreadSummary, TodoItem, ToolDebugRow } from "./types";
 
 const CURRENT_THREAD_KEY = "deep-research-ui:current-thread";
 const THREAD_QUERY_PARAM = "thread_id";
@@ -54,6 +54,7 @@ type MessageExchange = {
 };
 const ACTIVE_RUN_STATUSES = new Set(["pending", "running"]);
 const TERMINAL_RUN_EVENTS = new Set(["completed", "failed", "interrupted", "timeout"]);
+const PERSISTED_RUN_STATUSES = new Set(["success", "error", "interrupted", "timeout"]);
 
 function threadIdFromUrl(): string | null {
   const params = new URLSearchParams(window.location.search);
@@ -182,6 +183,20 @@ function messageSnippet(value: string, maxLength = 180): string {
   return compacted.length > maxLength ? `${compacted.slice(0, maxLength - 3)}...` : compacted;
 }
 
+function messagesFromCheckpointSnapshots(
+  runs: RunSummary[],
+  snapshots: Record<string, RunCheckpointSnapshot>,
+): Message[] {
+  return runs.flatMap((run) => snapshots[run.runId]?.messages ?? []) as Message[];
+}
+
+function sameMessage(left: Message, right: Message): boolean {
+  if (left.id && right.id && left.id === right.id) {
+    return true;
+  }
+  return left.type === right.type && messageText(left) === messageText(right);
+}
+
 function latestUserIndex(messages: Message[]): number {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     if (messages[index].type === "human") {
@@ -286,16 +301,6 @@ function protocolEventData(event: ProtocolEvent): Record<string, unknown> {
     : {};
 }
 
-function debugEventsFromProtocol(events: ProtocolEvent[]): DebugEvent[] {
-  return events.map((event) => ({
-    id: event.event_id,
-    channel: event.method,
-    namespace: event.params.namespace,
-    timestamp: event.params.timestamp,
-    data: event.params.data,
-  }));
-}
-
 function protocolEventsFromDebugEvents(events: DebugEvent[]): ProtocolEvent[] {
   return events.map((event, index) => ({
     type: "event",
@@ -320,26 +325,6 @@ function toolRowsFromStream(toolCalls: DeepResearchStream["toolCalls"]): ToolDeb
     name: toolCallName(toolCall),
     state: toolCall.state,
   }));
-}
-
-function toolRowsFromEvents(events: ProtocolEvent[]): ToolDebugRow[] {
-  const rows = new Map<string, ToolDebugRow>();
-  for (const event of events) {
-    if (event.method !== "tools") {
-      continue;
-    }
-    const data = protocolEventData(event);
-    const id = String(data.tool_call_id ?? data.toolCallId ?? data.id ?? `${event.event_id}-${event.seq}`);
-    const existing = rows.get(id);
-    const name = String(data.tool_name ?? data.name ?? existing?.name ?? "tool");
-    const kind = String(data.event ?? "");
-    rows.set(id, {
-      id,
-      name,
-      state: kind.includes("finish") || kind.includes("end") ? "completed" : "pending",
-    });
-  }
-  return [...rows.values()];
 }
 
 function subagentCardsFromEvents(events: ProtocolEvent[]): SubagentCard[] {
@@ -458,37 +443,6 @@ function subagentCardsFromEvents(events: ProtocolEvent[]): SubagentCard[] {
   }));
 }
 
-function subagentIdsFromDebugEvents(events: DebugEvent[], runId: string | null): Set<string> {
-  const ids = new Set<string>();
-  if (!runId) {
-    return ids;
-  }
-  for (const event of events) {
-    if (event.channel !== "tools") {
-      continue;
-    }
-    const data = typeof event.data === "object" && event.data !== null ? event.data as Record<string, unknown> : {};
-    if (data.run_id != null && data.run_id !== runId) {
-      continue;
-    }
-    const name = String(data.name ?? data.tool_name ?? "");
-    const kind = String(data.event ?? "");
-    if (name !== "task" || (kind && !kind.includes("start"))) {
-      continue;
-    }
-    for (const value of [data.toolCallId, data.tool_call_id, data.id]) {
-      if (typeof value === "string" && value) {
-        ids.add(value);
-      }
-    }
-    const namespaceId = event.namespace.find((part) => part.startsWith("tools:"))?.slice("tools:".length);
-    if (namespaceId) {
-      ids.add(namespaceId);
-    }
-  }
-  return ids;
-}
-
 function subagentCardsForLiveRun(
   events: DebugEvent[],
   runId: string | null,
@@ -563,7 +517,7 @@ export function App() {
   const [focusedMessageIndex, setFocusedMessageIndex] = useState(-1);
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
-  const [runDebugSnapshots, setRunDebugSnapshots] = useState<Record<string, RunDebugSnapshot>>({});
+  const [runCheckpointSnapshots, setRunCheckpointSnapshots] = useState<Record<string, RunCheckpointSnapshot>>({});
   const [debugSnapshotLoading, setDebugSnapshotLoading] = useState(false);
   const [debugSnapshotError, setDebugSnapshotError] = useState<string | null>(null);
   const [runTodoCache, setRunTodoCache] = useState<Record<string, TodoItem[]>>({});
@@ -622,16 +576,27 @@ export function App() {
     [activeRun, currentRunId, stream],
   );
   const runActivity = useMemo(() => selectRunActivity(stream), [stream]);
+  const runsInMessageOrder = useMemo(
+    () => [...runs].sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
+    [runs],
+  );
+  const persistedMessages = useMemo(
+    () => messagesFromCheckpointSnapshots(runsInMessageOrder, runCheckpointSnapshots),
+    [runCheckpointSnapshots, runsInMessageOrder],
+  );
   const displayedMessages = useMemo(() => {
-    const confirmed = visibleMessages;
+    const liveMessages = currentRunId ? visibleMessages.filter((message) => {
+      return !persistedMessages.some((persisted) => sameMessage(persisted, message));
+    }) : [];
+    const confirmed = [...persistedMessages, ...liveMessages];
     const pending = optimisticMessages.filter(
       (optimistic) =>
         !confirmed.some(
-          (message) => message.type === optimistic.type && messageText(message) === messageText(optimistic),
+          (message) => sameMessage(message, optimistic),
         ),
     );
     return [...confirmed, ...pending];
-  }, [optimisticMessages, visibleMessages]);
+  }, [currentRunId, optimisticMessages, persistedMessages, visibleMessages]);
   const runMessageIndex = useMemo(() => {
     if (!runActivity && liveRunSubagentCards.length === 0) {
       return -1;
@@ -643,10 +608,6 @@ export function App() {
     const fallbackIndex = currentStateMessageIndex >= 0 ? currentStateMessageIndex : displayedMessages.length - 1;
     return exchangeForMessage(displayedMessages, focusedMessageIndex >= 0 ? focusedMessageIndex : fallbackIndex);
   }, [currentStateMessageIndex, displayedMessages, focusedMessageIndex]);
-  const runsInMessageOrder = useMemo(
-    () => [...runs].sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
-    [runs],
-  );
   const selectedRun = useMemo(() => {
     if (!selectedExchange) {
       return null;
@@ -674,8 +635,8 @@ export function App() {
     if (run.runId === currentRunId) {
       return liveRunSubagentCards;
     }
-    const snapshot = runDebugSnapshots[run.runId];
-    return snapshot ? subagentCardsFromEvents(snapshot.events) : [];
+    const snapshot = runCheckpointSnapshots[run.runId];
+    return snapshot ? snapshot.subagents : [];
   }
 
   const currentRun = currentRunId
@@ -689,17 +650,16 @@ export function App() {
     : null;
   const debugRun = selectedRun ?? currentRun;
   const selectedRunId = debugRun?.runId ?? null;
-  const selectedSnapshot = selectedRunId ? runDebugSnapshots[selectedRunId] : undefined;
+  const selectedSnapshot = selectedRunId ? runCheckpointSnapshots[selectedRunId] : undefined;
   const selectedRunIsLive = selectedRunId !== null && selectedRunId === currentRunId;
-  const snapshotTodos = selectedSnapshot ? selectTodosFromValues(selectedSnapshot.values) ?? [] : [];
+  const snapshotTodos = selectedSnapshot ? selectedSnapshot.todos : [];
   const cachedTodos = selectedRunId ? runTodoCache[selectedRunId] ?? [] : [];
-  const snapshotEvents = selectedSnapshot ? debugEventsFromProtocol(selectedSnapshot.events) : [];
   const debugTodos = selectedRunIsLive
     ? (todos.length > 0 ? todos : liveEventTodos.length > 0 ? liveEventTodos : cachedTodos.length > 0 ? cachedTodos : snapshotTodos)
     : snapshotTodos.length > 0 ? snapshotTodos : cachedTodos;
-  const debugSubagents = selectedRunIsLive ? liveRunSubagentCards : selectedSnapshot ? subagentCardsFromEvents(selectedSnapshot.events) : [];
-  const debugToolRows = selectedRunIsLive ? toolRowsFromStream(stream.toolCalls) : selectedSnapshot ? toolRowsFromEvents(selectedSnapshot.events) : [];
-  const debugEvents = selectedRunIsLive ? stream.debugEvents : snapshotEvents;
+  const debugSubagents = selectedRunIsLive ? liveRunSubagentCards : selectedSnapshot ? selectedSnapshot.subagents : [];
+  const debugToolRows = selectedRunIsLive ? toolRowsFromStream(stream.toolCalls) : [];
+  const debugEvents = selectedRunIsLive ? stream.debugEvents : [];
 
   const registerMessageNode = useCallback((index: number, node: HTMLElement | null): void => {
     if (node) {
@@ -803,6 +763,7 @@ export function App() {
     setFocusedMessageIndex(-1);
     setCurrentRunId(null);
     setDebugSnapshotError(null);
+    setRunCheckpointSnapshots({});
     messageNodesRef.current.clear();
     loggedMessageTextRef.current.clear();
     stream.clearDebugEvents();
@@ -1153,29 +1114,41 @@ export function App() {
   }, [apiUrl, threadId]);
 
   useEffect(() => {
-    if (!threadId || !selectedRunId || selectedRunIsLive || runDebugSnapshots[selectedRunId]) {
+    if (!threadId) {
+      return undefined;
+    }
+    const missingRuns = runs.filter(
+      (run) =>
+        PERSISTED_RUN_STATUSES.has(run.status) &&
+        run.runId !== currentRunId &&
+        !runCheckpointSnapshots[run.runId],
+    );
+    if (missingRuns.length === 0) {
       return undefined;
     }
     let cancelled = false;
     setDebugSnapshotLoading(true);
     setDebugSnapshotError(null);
-    void getRunDebugSnapshot(apiUrl, threadId, selectedRunId)
-      .then((snapshot) => {
+    void Promise.all(missingRuns.map((run) => getRunCheckpointSnapshot(apiUrl, threadId, run.runId)))
+      .then((snapshots) => {
         if (cancelled) {
           return;
         }
-        setRunDebugSnapshots((current) => ({ ...current, [selectedRunId]: snapshot }));
+        setRunCheckpointSnapshots((current) => ({
+          ...current,
+          ...Object.fromEntries(snapshots.map((snapshot) => [snapshot.run.runId, snapshot])),
+        }));
       })
       .catch((caught) => {
         if (cancelled) {
           return;
         }
-        logger.error("runs.debug.load.failed", {
+        logger.error("runs.checkpoints.load.failed", {
           threadId,
-          runId: selectedRunId,
+          count: missingRuns.length,
           message: caught instanceof Error ? caught.message : String(caught),
         });
-        setDebugSnapshotError(caught instanceof Error ? caught.message : "Unable to load run debug.");
+        setDebugSnapshotError(caught instanceof Error ? caught.message : "Unable to load run checkpoints.");
       })
       .finally(() => {
         if (!cancelled) {
@@ -1185,7 +1158,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [apiUrl, runDebugSnapshots, selectedRunId, selectedRunIsLive, threadId]);
+  }, [apiUrl, currentRunId, runCheckpointSnapshots, runs, threadId]);
 
   useEffect(() => {
     const handlePopState = (): void => {
@@ -1197,6 +1170,7 @@ export function App() {
       setFocusedMessageIndex(-1);
       setCurrentRunId(null);
       setDebugSnapshotError(null);
+      setRunCheckpointSnapshots({});
       messageNodesRef.current.clear();
       joinedRunIds.current.clear();
       switchThreadRef.current?.(nextThreadId);
@@ -1242,6 +1216,41 @@ export function App() {
       window.clearInterval(interval);
     };
   }, [activeRun, apiUrl]);
+
+  useEffect(() => {
+    if (!activeRun || stream.isLoading || joinedRunIds.current.has(activeRun.runId)) {
+      return;
+    }
+    logger.info("activeRun.banner.autoJoin", activeRun);
+    void continueActiveRun(activeRun);
+    // continueActiveRun intentionally owns the resume/join side effects.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeRun, stream.isLoading]);
+
+  useEffect(() => {
+    if (!currentRunId || stream.isLoading) {
+      return;
+    }
+    const run = runs.find((item) => item.runId === currentRunId);
+    if (run && !ACTIVE_RUN_STATUSES.has(run.status)) {
+      logger.info("activeRun.current.completed", { threadId, runId: currentRunId, status: run.status });
+      setCurrentRunId(null);
+    }
+  }, [currentRunId, runs, stream.isLoading, threadId]);
+
+  useEffect(() => {
+    if (!threadId || stream.isLoading) {
+      return;
+    }
+    const active = runs.find((run) => ACTIVE_RUN_STATUSES.has(run.status));
+    if (!active || joinedRunIds.current.has(active.runId) || active.runId === currentRunId) {
+      return;
+    }
+    logger.info("activeRun.autoJoin", { threadId, runId: active.runId, status: active.status });
+    void continueActiveRun({ threadId, runId: active.runId });
+    // continueActiveRun intentionally owns the resume/join side effects.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentRunId, runs, stream.isLoading, threadId]);
 
   useEffect(() => {
     if (!threadId) {

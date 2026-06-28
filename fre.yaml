@@ -1,0 +1,17 @@
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: free-tier
+spec:
+  template:
+    spec:
+      nodeClassRef:
+        group: eks.amazonaws.com
+        kind: NodeClass
+        name: default
+      requirements:
+      - key: node.kubernetes.io/instance-type
+        operator: In
+        values:
+        - t3.micro
+        - t3.small

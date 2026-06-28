@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import logging
 import os
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from .deep_agent import ai_message, human_message, input_text
@@ -94,30 +96,48 @@ class ResearchDeepAgentRunner:
     def __init__(self, repo: Repository) -> None:
         self.repo = repo
         self._agent: Any = None
+        self._prompt_mtime: float | None = None
         self._checkpointer_cm: Any = None
         self._checkpointer: Any = None
         self._setup_lock = asyncio.Lock()
 
+    def _current_prompt_mtime(self) -> float | None:
+        try:
+            import research_agent.prompts as prompts
+        except Exception:
+            return None
+        path = getattr(prompts, "__file__", None)
+        if not path:
+            return None
+        try:
+            return Path(path).stat().st_mtime
+        except OSError:
+            return None
+
     async def _ensure_agent(self) -> Any:
         async with self._setup_lock:
-            if self._agent is not None:
+            prompt_mtime = self._current_prompt_mtime()
+            if self._agent is not None and prompt_mtime == self._prompt_mtime:
                 logger.debug("agent.ensure.reuse")
                 return self._agent
+            if self._agent is not None:
+                logger.info(
+                    "agent.ensure.reload prompt_mtime=%s previous_prompt_mtime=%s",
+                    prompt_mtime,
+                    self._prompt_mtime,
+                )
 
             try:
                 logger.info("agent.ensure.imports.start")
                 from deepagents import create_deep_agent
                 from langchain_google_genai import ChatGoogleGenerativeAI
                 from langchain.chat_models import init_chat_model
-                from research_agent.prompts import (
-                    RESEARCHER_INSTRUCTIONS,
-                    RESEARCH_WORKFLOW_INSTRUCTIONS,
-                    SUBAGENT_DELEGATION_INSTRUCTIONS,
-                )
+                import research_agent.prompts as prompts
                 from research_agent.tools import tavily_search, think_tool
             except Exception as exc:  # pragma: no cover - environment dependent
                 logger.exception("agent.ensure.imports.failed")
                 raise ResearchRuntimeUnavailable(str(exc)) from exc
+            prompts = importlib.reload(prompts)
 
             max_concurrent_research_units = int(
                 os.getenv("MAX_CONCURRENT_RESEARCH_UNITS", "3")
@@ -127,11 +147,11 @@ class ResearchDeepAgentRunner:
             )
             current_date = datetime.now().strftime("%Y-%m-%d")
             instructions = (
-                RESEARCH_WORKFLOW_INSTRUCTIONS
+                prompts.RESEARCH_WORKFLOW_INSTRUCTIONS
                 + "\n\n"
                 + "=" * 80
                 + "\n\n"
-                + SUBAGENT_DELEGATION_INSTRUCTIONS.format(
+                + prompts.SUBAGENT_DELEGATION_INSTRUCTIONS.format(
                     max_concurrent_research_units=max_concurrent_research_units,
                     max_researcher_iterations=max_researcher_iterations,
                 )
@@ -142,7 +162,7 @@ class ResearchDeepAgentRunner:
                     "Delegate research to the sub-agent researcher. Only give "
                     "this researcher one topic at a time."
                 ),
-                "system_prompt": RESEARCHER_INSTRUCTIONS.format(date=current_date),
+                "system_prompt": prompts.RESEARCHER_INSTRUCTIONS.format(date=current_date),
                 "tools": [tavily_search, think_tool],
             }
 
@@ -186,6 +206,7 @@ class ResearchDeepAgentRunner:
                 logger.warning("agent.ensure.create.retry_without_checkpointer")
                 kwargs.pop("checkpointer", None)
                 self._agent = create_deep_agent(**kwargs)
+            self._prompt_mtime = prompt_mtime
             logger.info("agent.ensure.create.complete")
             return self._agent
 
@@ -247,7 +268,7 @@ class ResearchDeepAgentRunner:
             {"event": "running", "run_id": run.run_id, "recovered": True},
         )
         config = self._run_config(run)
-        active_messages: dict[tuple[str, ...], dict[str, str]] = {}
+        active_messages: dict[tuple[str, ...], dict[str, Any]] = {}
         final_text = ""
         try:
             input_value: Any = None
@@ -298,7 +319,6 @@ class ResearchDeepAgentRunner:
 
     async def run(self, run: RunRecord, input_value: Any) -> None:
         logger.info("research.run.start thread_id=%s run_id=%s", run.thread_id, run.run_id)
-        agent = await self._ensure_agent()
         run.status = "running"
         await self.repo.save_run(run)
         logger.info("research.run.status_running thread_id=%s run_id=%s", run.thread_id, run.run_id)
@@ -341,8 +361,9 @@ class ResearchDeepAgentRunner:
 
         config = self._run_config(run)
         input_payload = {"messages": [{"role": "user", "content": user["content"]}]}
-        active_messages: dict[tuple[str, ...], dict[str, str]] = {}
+        active_messages: dict[tuple[str, ...], dict[str, Any]] = {}
         final_text = ""
+        agent = await self._ensure_agent()
 
         try:
             logger.info("research.run.astream_events.start thread_id=%s run_id=%s", run.thread_id, run.run_id)
@@ -451,7 +472,7 @@ class ResearchDeepAgentRunner:
         thread_id: str,
         run_id: str,
         event: dict[str, Any],
-        active_messages: dict[tuple[str, ...], dict[str, str]],
+        active_messages: dict[tuple[str, ...], dict[str, Any]],
     ) -> None:
         kind = event.get("event")
         metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
@@ -459,18 +480,18 @@ class ResearchDeepAgentRunner:
         message_key = tuple(namespace)
         node = str(metadata.get("langgraph_node") or event.get("name") or "agent")
         data = event.get("data") if isinstance(event.get("data"), dict) else {}
-        logger.debug(
-            "research.event.mirror thread_id=%s kind=%s node=%s namespace=%s",
-            thread_id,
-            kind,
-            node,
-            namespace,
-        )
+        # logger.debug(
+        #     "research.event.mirror thread_id=%s kind=%s node=%s namespace=%s",
+        #     thread_id,
+        #     kind,
+        #     node,
+        #     namespace,
+        # )
 
         if kind in {"on_chat_model_start", "on_llm_start"}:
             message_id = new_id()
-            logger.info("research.event.message_start thread_id=%s message_id=%s node=%s namespace=%s", thread_id, message_id, node, namespace)
-            active_messages[message_key] = {"id": message_id, "text": ""}
+            # logger.info("research.event.message_start thread_id=%s message_id=%s node=%s namespace=%s", thread_id, message_id, node, namespace)
+            active_messages[message_key] = {"id": message_id, "text": "", "events": 0}
             await self.repo.append_event(
                 thread_id,
                 "messages",
@@ -488,14 +509,28 @@ class ResearchDeepAgentRunner:
             return
 
         if kind in {"on_chat_model_stream", "on_llm_stream"}:
+            await asyncio.sleep(.9)  # yield to event loop
             text = content_from_chunk(data.get("chunk"))
             if text:
-                logger.debug("research.event.message_delta thread_id=%s node=%s namespace=%s chunk_length=%s", thread_id, node, namespace, len(text))
+                # logger.debug("research.event.message_delta thread_id=%s node=%s namespace=%s chunk_length=%s", thread_id, node, namespace, len(text))
                 current = active_messages.setdefault(
                     message_key,
-                    {"id": new_id(), "text": ""},
+                    {"id": new_id(), "text": "", "events": 0},
                 )
-                current["text"] += text
+                current["text"] = str(current["text"]) + text
+                current["events"] = int(current.get("events", 0)) + 1
+                if current["events"] % 10 == 0:
+                    logger.info(
+                        "research.event.message_delta thread_id=%s run_id=%s node=%s namespace=%s message_id=%s event_count=%s text_length=%s chunk_length=%s",
+                        thread_id,
+                        run_id,
+                        node,
+                        namespace,
+                        current["id"],
+                        current["events"],
+                        len(current["text"]),
+                        len(text),
+                    )
                 await self.repo.append_event(
                     thread_id,
                     "messages",
@@ -538,13 +573,13 @@ class ResearchDeepAgentRunner:
         if kind == "on_chain_stream":
             values = values_from_update_chunk(data.get("chunk"))
             if values:
-                logger.info(
-                    "research.event.values_update thread_id=%s run_id=%s namespace=%s keys=%s",
-                    thread_id,
-                    run_id,
-                    namespace,
-                    sorted(values),
-                )
+                # logger.info(
+                #     "research.event.values_update thread_id=%s run_id=%s namespace=%s keys=%s",
+                #     thread_id,
+                #     run_id,
+                #     namespace,
+                #     sorted(values),
+                # )
                 await self.repo.append_event(
                     thread_id,
                     "updates",
@@ -595,12 +630,12 @@ class ResearchDeepAgentRunner:
             return
 
         if kind == "on_tool_end":
-            logger.info(
-                "research.event.tool_end thread_id=%s tool=%s namespace=%s",
-                thread_id,
-                event.get("name") or "tool",
-                namespace,
-            )
+            # logger.info(
+            #     "research.event.tool_end thread_id=%s tool=%s namespace=%s",
+            #     thread_id,
+            #     event.get("name") or "tool",
+            #     namespace,
+            # )
             await self.repo.append_event(
                 thread_id,
                 "tools",

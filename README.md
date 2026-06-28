@@ -68,6 +68,41 @@ This provides a user-friendly chat interface and visualization of files in state
 
 <img width="2039" height="1495" alt="Screenshot 2025-11-17 at 1 11 27 PM" src="https://github.com/user-attachments/assets/d559876b-4c90-46fb-8e70-c16c93793fa8" />
 
+### Option 3: Local Deep Research UI
+
+This example also includes a React UI in `ui/` that connects to the local
+stream backend with `@langchain/langgraph-sdk/react` `useStream`.
+
+Start the backend:
+
+```bash
+cd stream-backend
+uvicorn app.main:app --reload --port 8123
+```
+
+Start the UI:
+
+```bash
+cd ui
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173`. The UI uses `useStream` with
+`filterSubagentMessages`, `subagentToolNames`, `streamSubgraphs`, and the SDK's
+selectors for `messages`, `toolCalls`, `subagents`, `activeSubagents`,
+`getSubagentsByMessage`, and `interrupts`. The main transcript shows coordinator
+messages while the debug panel shows subagent cards, delegated todos, tool
+progress, interrupts or permission requests, and the event timeline.
+
+Concurrent runs on the same thread are rejected by the backend. This is
+intentional: two active runs writing to one thread can interleave state,
+messages, and subagent namespaces in a way that makes streaming attribution
+ambiguous. If two browser tabs or surfaces share a thread, both may subscribe
+and observe the stream, but only one should start or resume a run at a time. The
+second run receives a `run_in_progress` error with the active run id; the UI
+should join, wait, cancel, or switch to a new thread.
+
 ## 📚 Resources
 
 - **[Deep Research Course](https://academy.langchain.com/courses/deep-research-with-langgraph)** - Full course on deep research with LangGraph

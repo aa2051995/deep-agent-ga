@@ -12,6 +12,7 @@ from .models import (
     ProtocolError,
     ProtocolSuccess,
     RunRecord,
+    ThreadState,
     new_id,
 )
 from .research_runtime import ResearchDeepAgentRunner, ResearchRuntimeUnavailable
@@ -81,6 +82,19 @@ class ProtocolService:
         task.add_done_callback(lambda done: self._on_task_done(run.thread_id, run.run_id, done))
         logger.info("service.task_scheduled thread_id=%s run_id=%s active_tasks=%s", run.thread_id, run.run_id, len(self.tasks))
 
+    def start_run_task(self, run: RunRecord, input_value: Any) -> bool:
+        task = self.run_tasks.get((run.thread_id, run.run_id))
+        if task is not None and not task.done():
+            logger.info(
+                "service.task_already_scheduled thread_id=%s run_id=%s",
+                run.thread_id,
+                run.run_id,
+            )
+            return False
+        task = asyncio.create_task(self.runner.run(run, input_value))
+        self._track_task(run, task)
+        return True
+
     def _on_task_done(self, thread_id: str, run_id: str, task: asyncio.Task[None]) -> None:
         self.tasks.discard(task)
         self.run_tasks.pop((thread_id, run_id), None)
@@ -97,6 +111,13 @@ class ProtocolService:
                 logger.info("service.task.complete thread_id=%s run_id=%s remaining_tasks=%s", thread_id, run_id, len(self.tasks))
         except asyncio.CancelledError:
             logger.info("service.task.cancelled thread_id=%s run_id=%s remaining_tasks=%s", thread_id, run_id, len(self.tasks))
+
+    async def _latest_run_state(self, thread_id: str, run_id: str) -> ThreadState | None:
+        history = await self.repo.get_history(thread_id, limit=200)
+        for state in history:
+            if state.metadata.get("run_id") == run_id and state.checkpoint.checkpoint_ns in {"", None}:
+                return state
+        return None
 
     async def handle_command(self, thread_id: str, command: ProtocolCommand) -> ProtocolSuccess | ProtocolError:
         logger.info("command.handle.start thread_id=%s command_id=%s method=%s", thread_id, command.id, command.method)
@@ -133,7 +154,13 @@ class ProtocolService:
             logger.exception("command.handle.failed thread_id=%s command_id=%s method=%s", thread_id, command.id, command.method)
             return ProtocolError(id=command.id, error="command_failed", message=str(exc))
 
-    async def _run_start(self, thread_id: str, command: ProtocolCommand) -> ProtocolSuccess | ProtocolError:
+    async def _run_start(
+        self,
+        thread_id: str,
+        command: ProtocolCommand,
+        *,
+        schedule: bool = True,
+    ) -> ProtocolSuccess | ProtocolError:
         params = command.params
         assistant_id = str(params.get("assistant_id") or "demo")
         multitask_strategy = params.get("multitaskStrategy") or params.get("multitask_strategy") or "reject"
@@ -182,9 +209,12 @@ class ProtocolService:
             )
             await self.repo.create_run(run)
             logger.info("run.start.created thread_id=%s run_id=%s", thread_id, run.run_id)
-        task = asyncio.create_task(self.runner.run(run, params.get("input")))
-        self._track_task(run, task)
+        if schedule:
+            self.start_run_task(run, params.get("input"))
         return ProtocolSuccess(id=command.id, result={"run_id": run.run_id, "thread_id": thread_id})
+
+    async def create_pending_run(self, thread_id: str, command: ProtocolCommand) -> ProtocolSuccess | ProtocolError:
+        return await self._run_start(thread_id, command, schedule=False)
 
     async def resume_run(self, thread_id: str, run_id: str, resume_value: Any = None) -> bool:
         async with self.thread_locks[thread_id]:
@@ -198,6 +228,17 @@ class ProtocolService:
             task = self.run_tasks.get((thread_id, run_id))
             if task is not None and not task.done():
                 logger.info("run.resume.already_attached thread_id=%s run_id=%s", thread_id, run_id)
+                return True
+            state = await self._latest_run_state(thread_id, run_id)
+            if state is not None and not state.next:
+                logger.info("run.resume.mark_completed_from_checkpoint thread_id=%s run_id=%s", thread_id, run_id)
+                run.status = "success"
+                await self.repo.save_run(run)
+                await self.repo.append_event(
+                    thread_id,
+                    "lifecycle",
+                    {"event": "completed", "run_id": run_id, "reason": "checkpoint_complete"},
+                )
                 return True
             logger.warning("run.resume.recovering_detached thread_id=%s run_id=%s", thread_id, run_id)
             run.metadata = {**run.metadata, "recovered": True}
