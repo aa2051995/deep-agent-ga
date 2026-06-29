@@ -118,7 +118,7 @@ class ResearchDeepAgentRunner:
         async with self._setup_lock:
             prompt_mtime = self._current_prompt_mtime()
             if self._agent is not None and prompt_mtime == self._prompt_mtime:
-                logger.debug("agent.ensure.reuse")
+                logger.info("agent.ensure.reuse")
                 return self._agent
             if self._agent is not None:
                 logger.info(
@@ -509,7 +509,7 @@ class ResearchDeepAgentRunner:
             return
 
         if kind in {"on_chat_model_stream", "on_llm_stream"}:
-            await asyncio.sleep(.9)  # yield to event loop
+            # await asyncio.sleep(.9)  # yield to event loop
             text = content_from_chunk(data.get("chunk"))
             if text:
                 # logger.debug("research.event.message_delta thread_id=%s node=%s namespace=%s chunk_length=%s", thread_id, node, namespace, len(text))

@@ -171,7 +171,7 @@ class ProtocolService:
             multitask_strategy,
         )
         async with self.thread_locks[thread_id]:
-            logger.debug("run.start.lock_acquired thread_id=%s", thread_id)
+            logger.info("run.start.lock_acquired thread_id=%s", thread_id)
             await self.repo.ensure_thread(thread_id, assistant_id)
             active_runs = await self.repo.list_runs(thread_id, limit=1, status="running")
             if not active_runs:

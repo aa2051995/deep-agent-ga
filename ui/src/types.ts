@@ -55,12 +55,6 @@ export type ToolActivity = {
   status: "running" | "done";
 };
 
-export type ToolDebugRow = {
-  id: string;
-  name: string;
-  state: string;
-};
-
 export type TodoItem = {
   id: string;
   content: string;

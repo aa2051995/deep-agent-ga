@@ -81,7 +81,7 @@ class BackendFormatter(logging.Formatter):
 
 
 def configure_logging() -> None:
-    level = os.getenv("STREAM_BACKEND_LOG_LEVEL", "DEBUG").upper()
+    level = os.getenv("STREAM_BACKEND_LOG_LEVEL", "INFO").upper()
     use_color = os.getenv("STREAM_BACKEND_LOG_COLOR", "true").lower() not in {"0", "false", "no"}
     formatter = BackendFormatter(use_color=use_color)
     handler = logging.StreamHandler(sys.stderr)
@@ -114,6 +114,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Location"],
 )
 
 def create_repository():
@@ -365,173 +366,6 @@ def select_run_fields(run: dict, select: list[str] | None) -> dict:
     return {key: value for key, value in run.items() if key in allowed}
 
 
-def event_data(event: ProtocolEvent) -> dict[str, Any]:
-    return event.params.data if isinstance(event.params.data, dict) else {}
-
-
-def is_root_run_lifecycle(event: ProtocolEvent, run_id: str, names: set[str]) -> bool:
-    data = event_data(event)
-    return (
-        event.method == "lifecycle"
-        and event.params.namespace == []
-        and data.get("run_id") == run_id
-        and data.get("event") in names
-    )
-
-
-def select_run_debug_events(events: list[ProtocolEvent], run_id: str) -> list[ProtocolEvent]:
-    start_seq: int | None = None
-    end_seq: int | None = None
-    for event in events:
-        if is_root_run_lifecycle(event, run_id, {"running"}):
-            start_seq = event.seq
-            break
-    if start_seq is not None:
-        for event in events:
-            if event.seq < start_seq:
-                continue
-            if is_root_run_lifecycle(event, run_id, {"completed", "failed", "interrupted", "timeout"}):
-                end_seq = event.seq
-                break
-
-    selected: list[ProtocolEvent] = []
-    seen: set[tuple[int, str]] = set()
-    for event in events:
-        data = event_data(event)
-        in_range = start_seq is not None and event.seq >= start_seq and (end_seq is None or event.seq <= end_seq)
-        explicit = data.get("run_id") == run_id
-        if not in_range and not explicit:
-            continue
-        key = (event.seq, event.event_id)
-        if key in seen:
-            continue
-        seen.add(key)
-        selected.append(event)
-    return selected
-
-
-def select_run_values(events: list[ProtocolEvent], run_id: str) -> dict[str, Any]:
-    values: dict[str, Any] = {}
-    for event in events:
-        data = event_data(event)
-        if event.method == "values" and isinstance(data, dict):
-            if data.get("run_id") == run_id or event.params.namespace == []:
-                values.update({key: value for key, value in data.items() if key != "run_id"})
-        if (
-            event.method == "updates"
-            and event.params.namespace == []
-            and isinstance(data, dict)
-            and "todos" in data
-        ):
-            values["todos"] = data["todos"]
-    return values
-
-
-def namespace_label(namespace: list[str]) -> str:
-    return "/".join(namespace) if namespace else "root"
-
-
-def text_from_message_content(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if not isinstance(content, dict):
-        return ""
-    text = content.get("text")
-    return text if isinstance(text, str) else ""
-
-
-def todo_progress_summary(todos: Any) -> str:
-    if not isinstance(todos, list):
-        return "Todo list changed"
-    total = len(todos)
-    completed = 0
-    in_progress = 0
-    for todo in todos:
-        if not isinstance(todo, dict):
-            continue
-        status = todo.get("status")
-        if status in {"completed", "done", "success"}:
-            completed += 1
-        elif status in {"in_progress", "running", "active"}:
-            in_progress += 1
-    pending = max(total - completed - in_progress, 0)
-    return f"{completed}/{total} completed, {in_progress} in progress, {pending} pending"
-
-
-def workflow_step(
-    event: ProtocolEvent,
-    kind: str,
-    title: str,
-    detail: str | None = None,
-) -> dict[str, Any]:
-    return {
-        "seq": event.seq,
-        "timestamp": event.params.timestamp,
-        "kind": kind,
-        "title": title,
-        "detail": detail,
-        "namespace": event.params.namespace,
-        "scope": namespace_label(event.params.namespace),
-        "node": event.params.node,
-    }
-
-
-def workflow_step_from_event(event: ProtocolEvent) -> dict[str, Any] | None:
-    data = event_data(event)
-    if event.method == "lifecycle":
-        state = str(data.get("event") or "updated")
-        return workflow_step(event, "lifecycle", f"Run {state}", str(data.get("error") or "") or None)
-
-    if event.method == "checkpoints":
-        return workflow_step(event, "checkpoint", "Checkpoint saved", str(data.get("id") or "") or None)
-
-    if event.method == "updates" and event.params.namespace == [] and "todos" in data:
-        return workflow_step(event, "todo", "Todo progress updated", todo_progress_summary(data.get("todos")))
-
-    if event.method == "tools":
-        tool_name = str(data.get("tool_name") or data.get("name") or "tool")
-        state = str(data.get("event") or "")
-        if tool_name == "task" and state in {"tool-started", "on_tool_start"}:
-            raw_input = data.get("input")
-            task = raw_input if isinstance(raw_input, dict) else {}
-            subagent_type = str(task.get("subagent_type") or "subagent")
-            description = str(task.get("description") or "Subagent task")
-            return workflow_step(event, "subagent", f"Started {subagent_type}", description)
-        if state in {"tool-started", "on_tool_start"}:
-            return workflow_step(event, "tool", f"Started {tool_name}")
-        if state in {"tool-finished", "on_tool_end"}:
-            return workflow_step(event, "tool", f"Completed {tool_name}")
-
-    if event.method == "messages" and data.get("event") == "content-block-finish":
-        text = text_from_message_content(data.get("content")).strip()
-        if not text:
-            return None
-        title = "Subagent response completed" if event.params.namespace else "AI response completed"
-        return workflow_step(event, "message", title, text[:240])
-
-    return None
-
-
-def select_run_workflow(events: list[ProtocolEvent]) -> list[dict[str, Any]]:
-    workflow: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str, str]] = set()
-    for event in events:
-        step = workflow_step_from_event(event)
-        if step is None:
-            continue
-        key = (
-            str(step["kind"]),
-            str(step["title"]),
-            str(step["detail"] or ""),
-            namespace_label(event.params.namespace),
-        )
-        if key in seen:
-            continue
-        seen.add(key)
-        workflow.append(step)
-    return workflow
-
-
 def state_run_id(state: ThreadState) -> str | None:
     run_id = state.metadata.get("run_id")
     return run_id if isinstance(run_id, str) else None
@@ -699,36 +533,6 @@ def project_run_checkpoints(run: RunRecord, history: list[ThreadState]) -> dict[
             for state in run_states
         ],
     }
-
-
-async def list_debug_source_events(thread_id: str) -> list[ProtocolEvent]:
-    events: list[ProtocolEvent] = []
-    seen: set[str] = set()
-
-    def add_event(event: ProtocolEvent) -> None:
-        key = json.dumps(
-            {
-                "method": event.method,
-                "namespace": event.params.namespace,
-                "node": event.params.node,
-                "timestamp": event.params.timestamp,
-                "data": event.params.data,
-            },
-            sort_keys=True,
-            default=str,
-        )
-        if key in seen:
-            return
-        seen.add(key)
-        events.append(event)
-
-    source = getattr(repo, "inner", None)
-    if source is not None:
-        for event in await source.list_events(thread_id):
-            add_event(event)
-    for event in await repo.list_events(thread_id):
-        add_event(event)
-    return sorted(events, key=lambda event: (event.params.timestamp, event.seq))
 
 
 async def stream_thread_events(
@@ -1261,39 +1065,6 @@ async def get_run_checkpoints(thread_id: str, run_id: str, limit: int = 200) -> 
         len(projection["subagents"]),
     )
     return projection
-
-
-@app.get("/threads/{thread_id}/runs/{run_id}/debug")
-async def get_run_debug(thread_id: str, run_id: str, mode: str = "verbose") -> dict:
-    normalized_mode = mode.lower()
-    if normalized_mode not in {"verbose", "brief"}:
-        raise HTTPException(status_code=400, detail="mode must be 'verbose' or 'brief'")
-    logger.info("runs.debug.get thread_id=%s run_id=%s mode=%s", thread_id, run_id, normalized_mode)
-    run = await repo.get_run(thread_id, run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="Run not found")
-    events = await list_debug_source_events(thread_id)
-    run_events = select_run_debug_events(events, run_id)
-    values = select_run_values(run_events, run_id)
-    workflow = select_run_workflow(run_events)
-    response_events = run_events if normalized_mode == "verbose" else []
-    logger.info(
-        "runs.debug.get.complete thread_id=%s run_id=%s mode=%s events=%s workflow=%s values_keys=%s",
-        thread_id,
-        run_id,
-        normalized_mode,
-        len(run_events),
-        len(workflow),
-        sorted(values),
-    )
-    return {
-        "mode": normalized_mode,
-        "run": run.model_dump(),
-        "values": values,
-        "events": [event.model_dump() for event in response_events],
-        "event_count": len(run_events),
-        "workflow": workflow,
-    }
 
 
 @app.post("/threads/{thread_id}/runs/{run_id}/resume")

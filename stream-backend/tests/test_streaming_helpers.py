@@ -1,6 +1,6 @@
 import unittest
 
-from app.main import project_run_checkpoints, sdk_event_name, select_run_values, select_run_workflow
+from app.main import project_run_checkpoints, sdk_event_name
 from app.models import Checkpoint, EventParams, ProtocolEvent, RunRecord, ThreadState
 
 
@@ -19,78 +19,6 @@ class StreamingHelperTests(unittest.TestCase):
 
         self.assertEqual(sdk_event_name(protocol_event), "updates|tools:call-1")
         self.assertEqual(sdk_event_name(protocol_event, "metadata"), "metadata|tools:call-1")
-
-    def test_select_run_values_keeps_root_todos_from_updates(self) -> None:
-        events = [
-            event(1, "values", {"messages": ["hello"], "run_id": "run-1"}),
-            event(
-                2,
-                "updates",
-                {"todos": [{"content": "plan", "status": "completed"}], "run_id": "run-1"},
-            ),
-            event(
-                3,
-                "updates",
-                {"todos": [{"content": "ignore", "status": "pending"}], "run_id": "run-1"},
-                ["tools:call-1"],
-            ),
-            event(4, "values", {"messages": ["hello", "done"], "run_id": "run-1"}),
-        ]
-
-        values = select_run_values(events, "run-1")
-
-        self.assertEqual(
-            values,
-            {
-                "messages": ["hello", "done"],
-                "todos": [{"content": "plan", "status": "completed"}],
-            },
-        )
-
-    def test_select_run_workflow_keeps_big_steps(self) -> None:
-        events = [
-            event(1, "lifecycle", {"event": "running", "run_id": "run-1"}),
-            event(2, "messages", {"event": "message-start", "run_id": "run-1"}),
-            event(
-                3,
-                "updates",
-                {"todos": [{"content": "plan", "status": "in_progress"}], "run_id": "run-1"},
-            ),
-            event(
-                4,
-                "tools",
-                {
-                    "event": "tool-started",
-                    "tool_name": "task",
-                    "input": {"subagent_type": "researcher", "description": "Research sources"},
-                    "run_id": "run-1",
-                },
-            ),
-            event(
-                5,
-                "messages",
-                {"event": "content-block-delta", "content": {"text": "tiny"}, "run_id": "run-1"},
-            ),
-            event(
-                6,
-                "messages",
-                {"event": "content-block-finish", "content": {"text": "Final answer"}, "run_id": "run-1"},
-            ),
-            event(7, "lifecycle", {"event": "completed", "run_id": "run-1"}),
-        ]
-
-        workflow = select_run_workflow(events)
-
-        self.assertEqual(
-            [step["title"] for step in workflow],
-            [
-                "Run running",
-                "Todo progress updated",
-                "Started researcher",
-                "AI response completed",
-                "Run completed",
-            ],
-        )
 
     def test_project_run_checkpoints_uses_task_calls_as_subagents(self) -> None:
         previous = ThreadState(

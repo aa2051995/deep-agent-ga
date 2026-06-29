@@ -1,27 +1,25 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
-  ChevronRight,
   CircleStop,
   FlaskConical,
   KeyRound,
   Loader2,
   MessageSquare,
   MoreHorizontal,
-  PanelRight,
   Plus,
   Send,
   ShieldQuestion,
 } from "lucide-react";
 import type { Message } from "@langchain/langgraph-sdk";
 import type { SubagentStreamInterface } from "@langchain/langgraph-sdk/react";
-import { logger } from "./logger";
+import { getLogMode, logger, LOG_MODES, setLogMode } from "./logger";
+import type { LogMode } from "./logger";
 import { deleteThread, getRunCheckpointSnapshot, listRuns, listThreads, renameThread } from "./api";
-import { DEFAULT_API_URL, messageText, toolCallArgs, toolCallName, useDeepResearchStream } from "./stream";
+import { DEFAULT_API_URL, messageText, useDeepResearchStream } from "./stream";
 import type { DebugEvent, DeepResearchStream } from "./stream";
-import { selectInputRequests, selectTodos, selectTodosFromValues, subagentStreamToCard } from "./selectors";
-import type { InputRequest, ProtocolEvent, RunCheckpointSnapshot, RunSummary, SubagentCard, ThreadSummary, TodoItem, ToolDebugRow } from "./types";
+import { selectInputRequests, subagentStreamToCard } from "./selectors";
+import type { InputRequest, ProtocolEvent, RunCheckpointSnapshot, RunSummary, SubagentCard, ThreadSummary } from "./types";
 
 const CURRENT_THREAD_KEY = "deep-research-ui:current-thread";
 const THREAD_QUERY_PARAM = "thread_id";
@@ -32,26 +30,32 @@ const STREAM_MODES = [
   "tools",
   "tasks",
   "checkpoints",
-  "debug",
   "custom",
 ] as const;
-const DEBUG_SECTION_IDS = ["todos", "subagents", "tools", "timeline"] as const;
+const LOG_MODE_LABELS: Record<LogMode, string> = {
+  stream: "Stream only",
+  tokens: "Tokens only",
+  off: "Off",
+  error: "Errors",
+  warn: "Warnings",
+  info: "Info",
+  debug: "Debug",
+};
 
 type ActiveRun = {
   threadId: string;
   runId: string;
 };
-type DebugSectionId = (typeof DEBUG_SECTION_IDS)[number];
-type RunActivity = {
-  reasoning: string;
-  action: string;
+type RunAction = {
+  id: string;
+  label: string;
+  status: "running" | "done";
 };
-type MessageExchange = {
-  userIndex: number;
-  messageIndices: number[];
-  userText: string;
-  aiText: string;
+type DisplayedMessageEntry = {
+  message: Message;
+  runId: string | null;
 };
+const loggedLiveSubagentTaskIds = new Set<string>();
 const ACTIVE_RUN_STATUSES = new Set(["pending", "running"]);
 const TERMINAL_RUN_EVENTS = new Set(["completed", "failed", "interrupted", "timeout"]);
 const PERSISTED_RUN_STATUSES = new Set(["success", "error", "interrupted", "timeout"]);
@@ -132,14 +136,6 @@ function stringValue(value: unknown): string {
   return "";
 }
 
-function todoProgress(todos: TodoItem[]): { completed: number; percentage: number } {
-  const completed = todos.filter((todo) => todo.status === "completed").length;
-  return {
-    completed,
-    percentage: todos.length ? Math.round((completed / todos.length) * 100) : 0,
-  };
-}
-
 function collectStrings(value: unknown): string[] {
   if (typeof value === "string") {
     return [value];
@@ -178,16 +174,16 @@ function messageKey(message: Message, index: number): string {
   return message.id ?? `${message.type}-${index}`;
 }
 
-function messageSnippet(value: string, maxLength = 180): string {
-  const compacted = value.replace(/\s+/g, " ").trim();
-  return compacted.length > maxLength ? `${compacted.slice(0, maxLength - 3)}...` : compacted;
-}
-
-function messagesFromCheckpointSnapshots(
+function messageEntriesFromCheckpointSnapshots(
   runs: RunSummary[],
   snapshots: Record<string, RunCheckpointSnapshot>,
-): Message[] {
-  return runs.flatMap((run) => snapshots[run.runId]?.messages ?? []) as Message[];
+): DisplayedMessageEntry[] {
+  return runs.flatMap((run) =>
+    ((snapshots[run.runId]?.messages ?? []) as Message[]).map((message) => ({
+      message,
+      runId: run.runId,
+    })),
+  );
 }
 
 function sameMessage(left: Message, right: Message): boolean {
@@ -197,6 +193,10 @@ function sameMessage(left: Message, right: Message): boolean {
   return left.type === right.type && messageText(left) === messageText(right);
 }
 
+function isNearBottom(element: HTMLElement, threshold = 96): boolean {
+  return element.scrollHeight - element.scrollTop - element.clientHeight <= threshold;
+}
+
 function latestUserIndex(messages: Message[]): number {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     if (messages[index].type === "human") {
@@ -204,46 +204,6 @@ function latestUserIndex(messages: Message[]): number {
     }
   }
   return -1;
-}
-
-function exchangeForMessage(messages: Message[], index: number): MessageExchange | null {
-  if (messages.length === 0) {
-    return null;
-  }
-  const boundedIndex = Math.max(0, Math.min(index, messages.length - 1));
-  let userIndex = -1;
-  for (let cursor = boundedIndex; cursor >= 0; cursor -= 1) {
-    if (messages[cursor].type === "human") {
-      userIndex = cursor;
-      break;
-    }
-  }
-  if (userIndex === -1) {
-    return null;
-  }
-
-  let endIndex = messages.length;
-  for (let cursor = userIndex + 1; cursor < messages.length; cursor += 1) {
-    if (messages[cursor].type === "human") {
-      endIndex = cursor;
-      break;
-    }
-  }
-
-  const messageIndices = Array.from({ length: endIndex - userIndex }, (_, offset) => userIndex + offset);
-  const aiText = messages
-    .slice(userIndex + 1, endIndex)
-    .filter((message) => message.type === "ai")
-    .map(messageText)
-    .filter(Boolean)
-    .join("\n\n");
-
-  return {
-    userIndex,
-    messageIndices,
-    userText: messageText(messages[userIndex]),
-    aiText,
-  };
 }
 
 function actionFromTool(name: string, input: unknown): string {
@@ -268,31 +228,49 @@ function actionFromTool(name: string, input: unknown): string {
   return titleCase(name || "Working");
 }
 
-function toolStartData(event: DeepResearchStream["debugEvents"][number]): { name: string; input: unknown } | null {
-  if (event.channel !== "tools" || typeof event.data !== "object" || event.data === null) {
-    return null;
+function actionRowsFromEvents(events: DebugEvent[], runId: string | null): RunAction[] {
+  const actions = new Map<string, RunAction>();
+  for (const event of events) {
+    if (event.channel !== "tools" || typeof event.data !== "object" || event.data === null) {
+      continue;
+    }
+    const data = event.data as Record<string, unknown>;
+    if (runId !== null && data.run_id != null && data.run_id !== runId) {
+      continue;
+    }
+    const toolId = String(data.tool_call_id ?? data.id ?? event.id);
+    const name = stringValue(data.name ?? data.tool_name);
+    if (!name) {
+      continue;
+    }
+    const status = String(data.event ?? "").includes("finish") ? "done" : "running";
+    const existing = actions.get(toolId);
+    actions.set(toolId, {
+      id: toolId,
+      label: existing?.label ?? actionFromTool(name, data.input),
+      status: status === "done" ? "done" : existing?.status ?? "running",
+    });
   }
-  const data = event.data as Record<string, unknown>;
-  const kind = data.event;
-  if (kind !== "on_tool_start" && kind !== "tool-started") {
-    return null;
-  }
-  const name = stringValue(data.name ?? data.tool_name);
-  return { name, input: data.input };
+  return [...actions.values()];
 }
 
-function selectRunActivity(stream: DeepResearchStream): RunActivity | null {
-  if (!stream.isLoading) {
-    return null;
+function actionRowsFromSubagents(subagents: SubagentCard[]): RunAction[] {
+  const actions = new Map<string, RunAction>();
+  for (const subagent of subagents) {
+    actions.set(subagent.key, {
+      id: subagent.key,
+      label: `Delegating to ${subagent.name}`,
+      status: subagent.status === "done" ? "done" : "running",
+    });
+    for (const tool of subagent.tools) {
+      actions.set(tool.id, {
+        id: tool.id,
+        label: actionFromTool(tool.name, tool.input),
+        status: tool.status,
+      });
+    }
   }
-  const latestToolEvent = [...stream.debugEvents].reverse().map(toolStartData).find((event): event is { name: string; input: unknown } => event !== null);
-  const latestToolCall = stream.toolCalls.at(-1);
-  const toolName = latestToolEvent?.name || (latestToolCall ? toolCallName(latestToolCall) : "");
-  const input = latestToolEvent?.input ?? (latestToolCall ? toolCallArgs(latestToolCall) : undefined);
-  return {
-    reasoning: "Thinking through the request",
-    action: toolName ? actionFromTool(toolName, input) : "Preparing action",
-  };
+  return [...actions.values()];
 }
 
 function protocolEventData(event: ProtocolEvent): Record<string, unknown> {
@@ -317,14 +295,6 @@ function protocolEventsFromDebugEvents(events: DebugEvent[]): ProtocolEvent[] {
 
 function subagentKeyFromNamespace(namespace: string[]): string | null {
   return namespace.find((part) => part.startsWith("tools:")) ?? null;
-}
-
-function toolRowsFromStream(toolCalls: DeepResearchStream["toolCalls"]): ToolDebugRow[] {
-  return toolCalls.map((toolCall) => ({
-    id: toolCall.id,
-    name: toolCallName(toolCall),
-    state: toolCall.state,
-  }));
 }
 
 function subagentCardsFromEvents(events: ProtocolEvent[]): SubagentCard[] {
@@ -372,6 +342,19 @@ function subagentCardsFromEvents(events: ProtocolEvent[]): SubagentCard[] {
       const toolName = eventToolName;
       if (toolName === "task") {
         const input = typeof data.input === "object" && data.input !== null ? (data.input as Record<string, unknown>) : {};
+        const logKey = `${String(data.run_id ?? "run")}:${toolId}:${String(data.event ?? "tool")}`;
+        if (!loggedLiveSubagentTaskIds.has(logKey)) {
+          loggedLiveSubagentTaskIds.add(logKey);
+          logger.stream("liveSubagent.task.discovered", {
+            runId: typeof data.run_id === "string" ? data.run_id : undefined,
+            toolCallId: toolId,
+            toolEvent: String(data.event ?? ""),
+            subagentType: String(input.subagent_type ?? ""),
+            description: compactDetail(String(input.description ?? "")),
+            namespace: event.params.namespace,
+            seq: event.seq,
+          });
+        }
         card.description = String(input.description ?? card.description);
         card.name = String(input.subagent_type ?? card.name);
       } else {
@@ -447,6 +430,7 @@ function subagentCardsForLiveRun(
   events: DebugEvent[],
   runId: string | null,
   subagents: DeepResearchStream["subagents"],
+  currentRunId: string | null,
 ): SubagentCard[] {
   const runEvents = events.filter((event) => {
     const data = typeof event.data === "object" && event.data !== null ? event.data as Record<string, unknown> : {};
@@ -454,7 +438,13 @@ function subagentCardsForLiveRun(
   });
   const eventCards = subagentCardsFromEvents(protocolEventsFromDebugEvents(runEvents));
   const cards = new Map(eventCards.map((card) => [card.key.replace(/^tools:/, ""), card]));
-
+  if(currentRunId !== null) {
+   logger.token("subagentCardsForLiveRun", {
+    runId,
+    eventCards: eventCards.length,
+    subagents: subagents.size,
+  });
+}
   for (const [id, subagent] of subagents) {
     const key = id.replace(/^tools:/, "");
     const existing = cards.get(key);
@@ -470,24 +460,6 @@ function subagentCardsForLiveRun(
     });
   }
   return [...cards.values()];
-}
-
-function todosFromDebugEvents(events: DebugEvent[], runId: string | null): TodoItem[] {
-  let latest: TodoItem[] = [];
-  for (const event of events) {
-    if (event.channel !== "updates" || event.namespace.length > 0) {
-      continue;
-    }
-    const data = typeof event.data === "object" && event.data !== null ? event.data as Record<string, unknown> : {};
-    if (runId !== null && data.run_id != null && data.run_id !== runId) {
-      continue;
-    }
-    const eventTodos = selectTodosFromValues(data);
-    if (eventTodos !== null) {
-      latest = eventTodos;
-    }
-  }
-  return latest;
 }
 
 async function fetchRunStatus(apiUrl: string, run: ActiveRun): Promise<string | null> {
@@ -508,19 +480,15 @@ export function App() {
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [threadsLoading, setThreadsLoading] = useState(false);
   const [draft, setDraft] = useState("");
-  const [debugOpen, setDebugOpen] = useState(true);
+  const [logMode, setSelectedLogMode] = useState<LogMode>(() => getLogMode());
   const [error, setError] = useState<string | null>(null);
   const [activeRun, setActiveRun] = useState<ActiveRun | null>(null);
   const [visibleMessages, setVisibleMessages] = useState<Message[]>([]);
   const [optimisticMessages, setOptimisticMessages] = useState<Message[]>([]);
   const [openThreadMenu, setOpenThreadMenu] = useState<string | null>(null);
-  const [focusedMessageIndex, setFocusedMessageIndex] = useState(-1);
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const [runCheckpointSnapshots, setRunCheckpointSnapshots] = useState<Record<string, RunCheckpointSnapshot>>({});
-  const [debugSnapshotLoading, setDebugSnapshotLoading] = useState(false);
-  const [debugSnapshotError, setDebugSnapshotError] = useState<string | null>(null);
-  const [runTodoCache, setRunTodoCache] = useState<Record<string, TodoItem[]>>({});
   const joinedRunIds = useRef(new Set<string>());
   const activeRunRef = useRef<ActiveRun | null>(null);
   const isLoadingRef = useRef(false);
@@ -528,9 +496,9 @@ export function App() {
   const loggedMessageTextRef = useRef(new Map<string, string>());
   const messagesViewportRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
-  const messageNodesRef = useRef(new Map<number, HTMLElement>());
+  const shouldStickToBottomRef = useRef(true);
   const switchThreadRef = useRef<DeepResearchStream["switchThread"] | null>(null);
-  logger.debug("app.render", { threadId, apiUrl, debugOpen });
+  logger.debug("app.render", { threadId, apiUrl });
 
   const stream = useDeepResearchStream(
     apiUrl,
@@ -562,139 +530,115 @@ export function App() {
   );
   switchThreadRef.current = stream.switchThread;
 
-  const todos = useMemo(() => selectTodos(stream), [stream]);
   const liveRunSubagentCards = useMemo(
-    () => subagentCardsForLiveRun(stream.debugEvents, currentRunId, stream.subagents),
+    () => subagentCardsForLiveRun(stream.debugEvents, currentRunId, stream.subagents, currentRunId),
     [currentRunId, stream],
   );
-  const liveEventTodos = useMemo(
-    () => todosFromDebugEvents(stream.debugEvents, currentRunId),
+  const liveRunActions = useMemo(
+    () => actionRowsFromEvents(stream.debugEvents, currentRunId),
     [currentRunId, stream.debugEvents],
   );
   const inputRequests = useMemo(
     () => (currentRunId !== null && activeRun === null ? selectInputRequests(stream) : []),
     [activeRun, currentRunId, stream],
   );
-  const runActivity = useMemo(() => selectRunActivity(stream), [stream]);
   const runsInMessageOrder = useMemo(
     () => [...runs].sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
     [runs],
   );
-  const persistedMessages = useMemo(
-    () => messagesFromCheckpointSnapshots(runsInMessageOrder, runCheckpointSnapshots),
+  const currentRun = currentRunId ? runs.find((run) => run.runId === currentRunId) ?? null : null;
+  const currentRunStatus = currentRun?.status ?? null;
+  const currentRunSnapshotLoaded = currentRunId ? Boolean(runCheckpointSnapshots[currentRunId]) : false;
+  const persistedMessageEntries = useMemo(
+    () => messageEntriesFromCheckpointSnapshots(runsInMessageOrder, runCheckpointSnapshots),
     [runCheckpointSnapshots, runsInMessageOrder],
   );
-  const displayedMessages = useMemo(() => {
-    const liveMessages = currentRunId ? visibleMessages.filter((message) => {
+  const persistedMessages = useMemo(
+    () => persistedMessageEntries.map((entry) => entry.message),
+    [persistedMessageEntries],
+  );
+  const displayedMessageEntries = useMemo(() => {
+    const currentRunHasPersistedSnapshot =
+      currentRunId !== null &&
+      currentRunStatus !== null &&
+      PERSISTED_RUN_STATUSES.has(currentRunStatus) &&
+      currentRunSnapshotLoaded;
+    const liveStartIndex = currentRunId ? latestUserIndex(visibleMessages) : -1;
+    const liveCandidateMessages =
+      currentRunId !== null && !currentRunHasPersistedSnapshot
+        ? visibleMessages.slice(Math.max(liveStartIndex, 0))
+        : [];
+    const liveMessages = liveCandidateMessages.filter((message) => {
       return !persistedMessages.some((persisted) => sameMessage(persisted, message));
-    }) : [];
-    const confirmed = [...persistedMessages, ...liveMessages];
+    });
+    const liveEntries = liveMessages.map((message) => ({ message, runId: currentRunId }));
+    const confirmed = [...persistedMessageEntries, ...liveEntries];
     const pending = optimisticMessages.filter(
       (optimistic) =>
-        !confirmed.some(
-          (message) => sameMessage(message, optimistic),
+        !confirmed.some(({ message }) =>
+          sameMessage(message, optimistic),
         ),
     );
-    return [...confirmed, ...pending];
-  }, [currentRunId, optimisticMessages, persistedMessages, visibleMessages]);
-  const runMessageIndex = useMemo(() => {
-    if (!runActivity && liveRunSubagentCards.length === 0) {
-      return -1;
-    }
-    return latestUserIndex(displayedMessages);
-  }, [displayedMessages, liveRunSubagentCards.length, runActivity]);
-  const currentStateMessageIndex = runMessageIndex >= 0 ? runMessageIndex : latestUserIndex(displayedMessages);
-  const selectedExchange = useMemo(() => {
-    const fallbackIndex = currentStateMessageIndex >= 0 ? currentStateMessageIndex : displayedMessages.length - 1;
-    return exchangeForMessage(displayedMessages, focusedMessageIndex >= 0 ? focusedMessageIndex : fallbackIndex);
-  }, [currentStateMessageIndex, displayedMessages, focusedMessageIndex]);
-  const selectedRun = useMemo(() => {
-    if (!selectedExchange) {
-      return null;
-    }
-    const exchangeOrdinal = displayedMessages
-      .slice(0, selectedExchange.userIndex + 1)
-      .filter((message) => message.type === "human").length - 1;
-    return runsInMessageOrder[exchangeOrdinal] ?? null;
-  }, [displayedMessages, runsInMessageOrder, selectedExchange]);
-  function runForUserMessage(index: number): RunSummary | null {
-    if (displayedMessages[index]?.type !== "human") {
-      return null;
-    }
-    const exchangeOrdinal = displayedMessages
-      .slice(0, index + 1)
-      .filter((message) => message.type === "human").length - 1;
-    return runsInMessageOrder[exchangeOrdinal] ?? null;
+    return [
+      ...confirmed,
+      ...pending.map((message) => ({ message, runId: currentRunId })),
+    ];
+  }, [
+    currentRunId,
+    currentRunSnapshotLoaded,
+    currentRunStatus,
+    optimisticMessages,
+    persistedMessageEntries,
+    persistedMessages,
+    visibleMessages,
+  ]);
+  const displayedMessages = useMemo(
+    () => displayedMessageEntries.map((entry) => entry.message),
+    [displayedMessageEntries],
+  );
+
+  function runIdForUserMessage(index: number): string | null {
+    const entry = displayedMessageEntries[index];
+    return entry?.message.type === "human" ? entry.runId : null;
   }
 
   function subagentCardsForMessage(index: number): SubagentCard[] {
-    const run = runForUserMessage(index);
-    if (!run) {
-      return currentRunId !== null && index === latestUserIndex(displayedMessages) ? liveRunSubagentCards : [];
+    const runId = runIdForUserMessage(index);
+    if (!runId) {
+      if(displayedMessageEntries[index]?.message.type === "human") {
+        logger.token("subagentCardsForMessage.none", { runId, messageIndex: index });
+      }
+      return [];
     }
-    if (run.runId === currentRunId) {
+    if (runId === currentRunId && (currentRunStatus === null || !PERSISTED_RUN_STATUSES.has(currentRunStatus))) {
+      logger.token("subagentCardsForMessage.live", { runId, messageIndex: index });
       return liveRunSubagentCards;
     }
-    const snapshot = runCheckpointSnapshots[run.runId];
+    const run = runs.find((item) => item.runId === runId);
+    const snapshot = runCheckpointSnapshots[runId];
+    if (snapshot && run && PERSISTED_RUN_STATUSES.has(run.status)) {
+      return snapshot.subagents;
+    }
+ 
     return snapshot ? snapshot.subagents : [];
   }
 
-  const currentRun = currentRunId
-    ? runs.find((run) => run.runId === currentRunId) ?? {
-        runId: currentRunId,
-        threadId: threadId ?? "",
-        status: stream.isLoading ? "running" : "running",
-        createdAt: "",
-        updatedAt: "",
-      }
-    : null;
-  const debugRun = selectedRun ?? currentRun;
-  const selectedRunId = debugRun?.runId ?? null;
-  const selectedSnapshot = selectedRunId ? runCheckpointSnapshots[selectedRunId] : undefined;
-  const selectedRunIsLive = selectedRunId !== null && selectedRunId === currentRunId;
-  const snapshotTodos = selectedSnapshot ? selectedSnapshot.todos : [];
-  const cachedTodos = selectedRunId ? runTodoCache[selectedRunId] ?? [] : [];
-  const debugTodos = selectedRunIsLive
-    ? (todos.length > 0 ? todos : liveEventTodos.length > 0 ? liveEventTodos : cachedTodos.length > 0 ? cachedTodos : snapshotTodos)
-    : snapshotTodos.length > 0 ? snapshotTodos : cachedTodos;
-  const debugSubagents = selectedRunIsLive ? liveRunSubagentCards : selectedSnapshot ? selectedSnapshot.subagents : [];
-  const debugToolRows = selectedRunIsLive ? toolRowsFromStream(stream.toolCalls) : [];
-  const debugEvents = selectedRunIsLive ? stream.debugEvents : [];
-
-  const registerMessageNode = useCallback((index: number, node: HTMLElement | null): void => {
-    if (node) {
-      messageNodesRef.current.set(index, node);
-    } else {
-      messageNodesRef.current.delete(index);
+  function actionsForMessage(index: number): RunAction[] {
+    const runId = runIdForUserMessage(index);
+    if (!runId) {
+      return [];
     }
-  }, []);
-
-  const updateFocusedMessageIndex = useCallback((): void => {
-    const viewport = messagesViewportRef.current;
-    if (!viewport || messageNodesRef.current.size === 0) {
-      return;
+    const run = runs.find((item) => item.runId === runId);
+    const snapshot = runCheckpointSnapshots[runId];
+    if (snapshot && run && PERSISTED_RUN_STATUSES.has(run.status)) {
+      return actionRowsFromSubagents(snapshot.subagents);
     }
-    const viewportRect = viewport.getBoundingClientRect();
-    const anchor = viewportRect.top + Math.min(viewportRect.height * 0.35, 220);
-    let bestIndex = -1;
-    let bestDistance = Number.POSITIVE_INFINITY;
-
-    for (const [index, node] of messageNodesRef.current) {
-      const rect = node.getBoundingClientRect();
-      if (rect.bottom < viewportRect.top || rect.top > viewportRect.bottom) {
-        continue;
-      }
-      const distance = Math.abs(rect.top - anchor);
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        bestIndex = index;
-      }
+    if (runId === currentRunId) {
+      logger.token("actionsForMessage.live", { runId, messageIndex: index });
+      return liveRunActions;
     }
-
-    if (bestIndex >= 0) {
-      setFocusedMessageIndex((current) => (current === bestIndex ? current : bestIndex));
-    }
-  }, []);
+    return snapshot ? actionRowsFromSubagents(snapshot.subagents) : [];
+  }
 
   function logStreamingTokens(messages: Message[]): void {
     for (const [index, message] of messages.entries()) {
@@ -713,7 +657,7 @@ export function App() {
       }
       const token = text.slice(previous.length);
       loggedMessageTextRef.current.set(key, text);
-      logger.info("stream.token.received", {
+      logger.token("stream.token.received", {
         messageId: key,
         token,
         tokenLength: token.length,
@@ -760,11 +704,8 @@ export function App() {
     setActiveRun(null);
     setVisibleMessages([]);
     setOptimisticMessages([]);
-    setFocusedMessageIndex(-1);
     setCurrentRunId(null);
-    setDebugSnapshotError(null);
     setRunCheckpointSnapshots({});
-    messageNodesRef.current.clear();
     loggedMessageTextRef.current.clear();
     stream.clearDebugEvents();
     joinedRunIds.current.clear();
@@ -790,6 +731,7 @@ export function App() {
     pendingThreadTitleRef.current = content;
     setDraft("");
     stream.clearDebugEvents();
+    shouldStickToBottomRef.current = true;
     const optimisticMessage = {
       id: `optimistic-${crypto.randomUUID()}`,
       type: "human",
@@ -1019,42 +961,36 @@ export function App() {
     logStreamingTokens(stream.messages);
     setVisibleMessages(stream.messages);
     setOptimisticMessages((messages) =>
-      messages.filter(
-        (optimistic) =>
-          !stream.messages.some(
-            (message) => message.type === optimistic.type && messageText(message) === messageText(optimistic),
+      currentRunId === null
+        ? messages
+        : messages.filter(
+            (optimistic) =>
+              !stream.messages.some(
+                (message) => message.type === optimistic.type && messageText(message) === messageText(optimistic),
+              ),
           ),
-      ),
     );
-  }, [stream.isLoading, stream.messages]);
+  }, [currentRunId, stream.isLoading, stream.messages]);
 
-  useEffect(() => {
-    if (!currentRunId || todos.length === 0) {
+  useLayoutEffect(() => {
+    if (!shouldStickToBottomRef.current) {
       return;
     }
-    setRunTodoCache((current) => ({ ...current, [currentRunId]: todos }));
-  }, [currentRunId, todos]);
-
-  useLayoutEffect(() => {
     messagesEndRef.current?.scrollIntoView({ block: "end" });
   }, [displayedMessages]);
-
-  useLayoutEffect(() => {
-    updateFocusedMessageIndex();
-  }, [displayedMessages, updateFocusedMessageIndex]);
 
   useEffect(() => {
     const viewport = messagesViewportRef.current;
     if (!viewport) {
       return undefined;
     }
-    viewport.addEventListener("scroll", updateFocusedMessageIndex, { passive: true });
-    window.addEventListener("resize", updateFocusedMessageIndex);
-    return () => {
-      viewport.removeEventListener("scroll", updateFocusedMessageIndex);
-      window.removeEventListener("resize", updateFocusedMessageIndex);
+    const handleScroll = (): void => {
+      shouldStickToBottomRef.current = isNearBottom(viewport);
     };
-  }, [updateFocusedMessageIndex]);
+    handleScroll();
+    viewport.addEventListener("scroll", handleScroll, { passive: true });
+    return () => viewport.removeEventListener("scroll", handleScroll);
+  }, []);
 
   useEffect(() => {
     activeRunRef.current = activeRun;
@@ -1120,15 +1056,12 @@ export function App() {
     const missingRuns = runs.filter(
       (run) =>
         PERSISTED_RUN_STATUSES.has(run.status) &&
-        run.runId !== currentRunId &&
         !runCheckpointSnapshots[run.runId],
     );
     if (missingRuns.length === 0) {
       return undefined;
     }
     let cancelled = false;
-    setDebugSnapshotLoading(true);
-    setDebugSnapshotError(null);
     void Promise.all(missingRuns.map((run) => getRunCheckpointSnapshot(apiUrl, threadId, run.runId)))
       .then((snapshots) => {
         if (cancelled) {
@@ -1148,17 +1081,12 @@ export function App() {
           count: missingRuns.length,
           message: caught instanceof Error ? caught.message : String(caught),
         });
-        setDebugSnapshotError(caught instanceof Error ? caught.message : "Unable to load run checkpoints.");
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setDebugSnapshotLoading(false);
-        }
+        setError(caught instanceof Error ? caught.message : "Unable to load run checkpoints.");
       });
     return () => {
       cancelled = true;
     };
-  }, [apiUrl, currentRunId, runCheckpointSnapshots, runs, threadId]);
+  }, [apiUrl, runCheckpointSnapshots, runs, threadId]);
 
   useEffect(() => {
     const handlePopState = (): void => {
@@ -1167,11 +1095,8 @@ export function App() {
       setActiveRun(null);
       setVisibleMessages([]);
       setOptimisticMessages([]);
-      setFocusedMessageIndex(-1);
       setCurrentRunId(null);
-      setDebugSnapshotError(null);
       setRunCheckpointSnapshots({});
-      messageNodesRef.current.clear();
       joinedRunIds.current.clear();
       switchThreadRef.current?.(nextThreadId);
       setThreadId(nextThreadId);
@@ -1231,12 +1156,14 @@ export function App() {
     if (!currentRunId || stream.isLoading) {
       return;
     }
-    const run = runs.find((item) => item.runId === currentRunId);
-    if (run && !ACTIVE_RUN_STATUSES.has(run.status)) {
-      logger.info("activeRun.current.completed", { threadId, runId: currentRunId, status: run.status });
+    if (currentRunStatus && !ACTIVE_RUN_STATUSES.has(currentRunStatus)) {
+      if (PERSISTED_RUN_STATUSES.has(currentRunStatus) && !currentRunSnapshotLoaded) {
+        return;
+      }
+      logger.token("activeRun.current.completed", { threadId, runId: currentRunId, status: currentRunStatus });
       setCurrentRunId(null);
     }
-  }, [currentRunId, runs, stream.isLoading, threadId]);
+  }, [currentRunId, currentRunSnapshotLoaded, currentRunStatus, stream.isLoading, threadId]);
 
   useEffect(() => {
     if (!threadId || stream.isLoading) {
@@ -1407,9 +1334,26 @@ export function App() {
           <span>API</span>
           <input value={apiUrl} onChange={(event) => setApiUrl(event.target.value)} />
         </label>
+        <label className="api-url">
+          <span>Logging</span>
+          <select
+            value={logMode}
+            onChange={(event) => {
+              const nextMode = event.target.value as LogMode;
+              setSelectedLogMode(nextMode);
+              setLogMode(nextMode);
+            }}
+          >
+            {LOG_MODES.map((mode) => (
+              <option key={mode} value={mode}>
+                {LOG_MODE_LABELS[mode]}
+              </option>
+            ))}
+          </select>
+        </label>
       </aside>
 
-      <main className={debugOpen ? "workspace with-debug" : "workspace"}>
+      <main className="workspace">
         <section className="chat">
           <header className="topbar">
             <div>
@@ -1422,18 +1366,16 @@ export function App() {
                   <CircleStop size={18} />
                 </button>
               )}
-              <button
-                className="icon-button"
-                onClick={() => setDebugOpen((open) => !open)}
-                type="button"
-                title="Toggle debug panel"
-              >
-                <PanelRight size={18} />
-              </button>
             </div>
           </header>
 
-          <div className="messages" ref={messagesViewportRef}>
+          <div
+            className="messages"
+            ref={messagesViewportRef}
+            onScroll={(event) => {
+              shouldStickToBottomRef.current = isNearBottom(event.currentTarget);
+            }}
+          >
             {displayedMessages.length === 0 ? (
               <div className="empty-state">
                 <h1>What should we research?</h1>
@@ -1443,9 +1385,8 @@ export function App() {
               displayedMessages.map((message, index) => (
                 <MessageBubble
                   key={messageKey(message, index)}
-                  activity={index === runMessageIndex ? runActivity : null}
+                  actions={actionsForMessage(index)}
                   message={message}
-                  setNode={(node) => registerMessageNode(index, node)}
                   subagents={subagentCardsForMessage(index)}
                 />
               ))
@@ -1496,57 +1437,40 @@ export function App() {
             </button>
           </form>
         </section>
-
-        {debugOpen && (
-          <DebugPanel
-            debugEvents={debugEvents}
-            error={debugSnapshotError}
-            exchange={selectedExchange}
-            loading={debugSnapshotLoading}
-            run={debugRun}
-            scopedTodos={debugTodos}
-            subagents={debugSubagents}
-            toolRows={debugToolRows}
-          />
-        )}
       </main>
     </div>
   );
 }
 
 function MessageBubble({
-  activity,
+  actions,
   message,
-  setNode,
   subagents,
 }: {
-  activity: RunActivity | null;
+  actions: RunAction[];
   message: Message;
-  setNode: (node: HTMLElement | null) => void;
   subagents: SubagentCard[];
 }) {
   const text = messageText(message);
   const hideText = isInternalTodoUpdate(message, text);
-  if (message.type === "remove" || ((!text || hideText) && message.type === "ai" && subagents.length === 0)) {
+  if (message.type === "remove" || ((!text || hideText) && message.type === "ai" && subagents.length === 0 && actions.length === 0)) {
     return null;
   }
   return (
-    <article className={`message ${message.type}`} ref={setNode}>
+    <article className={`message ${message.type}`}>
       <div className="avatar">{message.type === "human" ? "You" : "AI"}</div>
       <div className="message-body">
-        {!hideText && (text || subagents.length === 0) && (
+        {!hideText && (text || (subagents.length === 0 && actions.length === 0)) && (
           <div className="message-content">{text || <span className="muted">Working...</span>}</div>
         )}
-        {activity && message.type === "human" && (
-          <div className="run-activity" aria-label="Run activity">
-            <div>
-              <span>Reasoning</span>
-              <strong>{activity.reasoning}</strong>
-            </div>
-            <div>
-              <span>Action</span>
-              <strong>{activity.action}</strong>
-            </div>
+        {actions.length > 0 && message.type === "human" && (
+          <div className="message-actions" aria-label="Run actions">
+            {actions.map((action) => (
+              <div className={`action-row ${action.status}`} key={action.id}>
+                <span />
+                <strong>{action.label}</strong>
+              </div>
+            ))}
           </div>
         )}
         {subagents.length > 0 && (
@@ -1601,164 +1525,6 @@ function InputRequests({
         </div>
       ))}
     </div>
-  );
-}
-
-function DebugPanel({
-  debugEvents,
-  error,
-  exchange,
-  loading,
-  run,
-  scopedTodos,
-  subagents,
-  toolRows,
-}: {
-  debugEvents: DeepResearchStream["debugEvents"];
-  error: string | null;
-  exchange: MessageExchange | null;
-  loading: boolean;
-  run: RunSummary | null;
-  scopedTodos: TodoItem[];
-  subagents: SubagentCard[];
-  toolRows: ToolDebugRow[];
-}) {
-  const [openSections, setOpenSections] = useState<Record<DebugSectionId, boolean>>({
-    todos: true,
-    subagents: true,
-    tools: true,
-    timeline: true,
-  });
-
-  function toggleSection(section: DebugSectionId): void {
-    setOpenSections((current) => ({ ...current, [section]: !current[section] }));
-  }
-
-  const progress = todoProgress(scopedTodos);
-  const stateMessage = loading
-    ? "Loading debug data for this run."
-    : error ?? (run ? "No debug data was saved for this run." : "No run is mapped to this exchange.");
-
-  return (
-    <aside className="debug-panel">
-      <section className="exchange-summary">
-        <span>{run ? `Selected run ${run.runId.slice(0, 8)} (${run.status})` : "Selected exchange"}</span>
-        {exchange ? (
-          <>
-            <strong>{messageSnippet(exchange.userText) || "User message"}</strong>
-            <p>{messageSnippet(exchange.aiText) || "No AI reply yet."}</p>
-          </>
-        ) : (
-          <p>No message selected.</p>
-        )}
-      </section>
-
-      <DebugSection
-        open={openSections.todos}
-        title="Todos"
-        onToggle={() => toggleSection("todos")}
-      >
-        <div className="todo-list">
-          {scopedTodos.length === 0 ? <p className="muted">{stateMessage}</p> : null}
-          {scopedTodos.length > 0 && (
-            <div className="todo-progress">
-              <div>
-                <span>Progress</span>
-                <strong>{progress.percentage}%</strong>
-              </div>
-              <div className="todo-progress-track">
-                <div style={{ width: `${progress.percentage}%` }} />
-              </div>
-              <small>
-                {progress.completed}/{scopedTodos.length} tasks
-              </small>
-            </div>
-          )}
-          {scopedTodos.map((todo) => (
-            <div className={`todo ${todo.status}`} key={todo.id}>
-              <span />
-              <div>
-                <strong>{todo.content}</strong>
-                {todo.agent ? <small>{todo.agent}</small> : null}
-              </div>
-            </div>
-          ))}
-        </div>
-      </DebugSection>
-
-      <DebugSection
-        open={openSections.subagents}
-        title="Subagents"
-        onToggle={() => toggleSection("subagents")}
-      >
-        <div className="subagent-list">
-          {subagents.length === 0 ? <p className="muted">{stateMessage}</p> : null}
-          {subagents.map((subagent) => (
-            <SubagentCardView key={subagent.key} subagent={subagent} />
-          ))}
-        </div>
-      </DebugSection>
-
-      <DebugSection
-        open={openSections.tools}
-        title="Tools"
-        onToggle={() => toggleSection("tools")}
-      >
-        <div className="tool-list">
-          {toolRows.length === 0 ? <p className="muted">{stateMessage}</p> : null}
-          {toolRows.map((toolCall) => (
-            <div className="tool-row" key={toolCall.id}>
-              <ChevronRight size={14} />
-              <span>{toolCall.name}</span>
-              <small>{toolCall.state}</small>
-            </div>
-          ))}
-        </div>
-      </DebugSection>
-
-      <DebugSection
-        open={openSections.timeline}
-        title="Timeline"
-        onToggle={() => toggleSection("timeline")}
-      >
-        <div className="timeline">
-          {debugEvents.length === 0 ? <p className="muted">{stateMessage}</p> : null}
-          {[...debugEvents].reverse().map((event) => (
-            <div className="timeline-row" key={event.id}>
-              <span>{event.channel}</span>
-              <small>{event.namespace.join("/") || "root"}</small>
-            </div>
-          ))}
-        </div>
-      </DebugSection>
-    </aside>
-  );
-}
-
-function DebugSection({
-  children,
-  open,
-  onToggle,
-  title,
-}: {
-  children: ReactNode;
-  open: boolean;
-  onToggle: () => void;
-  title: string;
-}) {
-  return (
-    <section className={open ? "panel-section open" : "panel-section"}>
-      <button
-        aria-expanded={open}
-        className="panel-section-header"
-        onClick={onToggle}
-        type="button"
-      >
-        <ChevronRight className={open ? "disclosure open" : "disclosure"} size={15} />
-        <h2>{title}</h2>
-      </button>
-      {open && <div className="panel-section-body">{children}</div>}
-    </section>
   );
 }
 
