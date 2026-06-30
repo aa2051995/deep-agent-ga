@@ -234,8 +234,11 @@ function actionRowsFromEvents(events: DebugEvent[], runId: string | null): RunAc
     if (event.channel !== "tools" || typeof event.data !== "object" || event.data === null) {
       continue;
     }
+    if (subagentKeyFromNamespace(event.namespace) !== null) {
+      continue;
+    }
     const data = event.data as Record<string, unknown>;
-    if (runId !== null && data.run_id != null && data.run_id !== runId) {
+    if (runId !== null && data.run_id !== runId) {
       continue;
     }
     const toolId = String(data.tool_call_id ?? data.id ?? event.id);
@@ -255,22 +258,11 @@ function actionRowsFromEvents(events: DebugEvent[], runId: string | null): RunAc
 }
 
 function actionRowsFromSubagents(subagents: SubagentCard[]): RunAction[] {
-  const actions = new Map<string, RunAction>();
-  for (const subagent of subagents) {
-    actions.set(subagent.key, {
-      id: subagent.key,
-      label: `Delegating to ${subagent.name}`,
-      status: subagent.status === "done" ? "done" : "running",
-    });
-    for (const tool of subagent.tools) {
-      actions.set(tool.id, {
-        id: tool.id,
-        label: actionFromTool(tool.name, tool.input),
-        status: tool.status,
-      });
-    }
-  }
-  return [...actions.values()];
+  return subagents.map((subagent) => ({
+    id: subagent.key,
+    label: `Delegating to ${subagent.name}`,
+    status: subagent.status === "done" ? "done" : "running",
+  }));
 }
 
 function protocolEventData(event: ProtocolEvent): Record<string, unknown> {
@@ -321,6 +313,7 @@ function subagentCardsFromEvents(events: ProtocolEvent[]): SubagentCard[] {
   }
 
   for (const event of events) {
+    const rawData = event.params.data;
     const data = protocolEventData(event);
     const eventToolId = String(data.tool_call_id ?? data.toolCallId ?? data.id ?? `${event.event_id}-${event.seq}`);
     const eventToolName = String(data.tool_name ?? data.name ?? "tool");
@@ -377,6 +370,31 @@ function subagentCardsFromEvents(events: ProtocolEvent[]): SubagentCard[] {
     }
 
     if (event.method === "messages") {
+      if (!data.event && Array.isArray(rawData)) {
+        const streamedMessage = rawData[0] as unknown;
+        const message =
+          typeof streamedMessage === "object" && streamedMessage !== null
+            ? streamedMessage as Record<string, unknown>
+            : {};
+        const text = stringValue(message.content);
+        if (text) {
+          const messageId = String(message.id ?? `${key}-${event.seq}`);
+          let cardMessage = card.messages.find((item) => item.id === messageId);
+          if (!cardMessage) {
+            cardMessage = {
+              id: messageId,
+              role: message.type === "human" ? "human" : "ai",
+              content: "",
+              componentKey: key,
+              namespace: event.params.namespace,
+              status: "streaming",
+            };
+            card.messages.push(cardMessage);
+          }
+          cardMessage.content += text;
+        }
+        continue;
+      }
       const messageEvent = String(data.event ?? "");
       if (messageEvent === "message-start") {
         const messageId = String(data.id ?? `${key}-${event.seq}`);
@@ -430,36 +448,55 @@ function subagentCardsForLiveRun(
   events: DebugEvent[],
   runId: string | null,
   subagents: DeepResearchStream["subagents"],
-  currentRunId: string | null,
 ): SubagentCard[] {
   const runEvents = events.filter((event) => {
     const data = typeof event.data === "object" && event.data !== null ? event.data as Record<string, unknown> : {};
-    return runId === null || data.run_id == null || data.run_id === runId;
+    return runId === null ? data.run_id == null : data.run_id === runId;
   });
   const eventCards = subagentCardsFromEvents(protocolEventsFromDebugEvents(runEvents));
   const cards = new Map(eventCards.map((card) => [card.key.replace(/^tools:/, ""), card]));
-  if(currentRunId !== null) {
-   logger.token("subagentCardsForLiveRun", {
-    runId,
-    eventCards: eventCards.length,
-    subagents: subagents.size,
-  });
-}
+  if (runId !== null) {
+    logger.token("subagentCardsForLiveRun", {
+      runId,
+      eventCards: eventCards.length,
+      subagents: subagents.size,
+    });
+  }
   for (const [id, subagent] of subagents) {
     const key = id.replace(/^tools:/, "");
     const existing = cards.get(key);
     if (!existing) {
       continue;
     }
+    const sdkCard = subagentStreamToCard(subagent);
     cards.set(key, {
       ...existing,
-      ...subagentStreamToCard(subagent),
+      ...sdkCard,
       key: existing.key,
       name: existing.name,
       description: existing.description,
+      messages: mergeSubagentMessages(existing.messages, sdkCard.messages),
+      tools: sdkCard.tools.length > 0 ? sdkCard.tools : existing.tools,
     });
   }
   return [...cards.values()];
+}
+
+function mergeSubagentMessages(
+  eventMessages: SubagentCard["messages"],
+  sdkMessages: SubagentCard["messages"],
+): SubagentCard["messages"] {
+  const merged = new Map<string, SubagentCard["messages"][number]>();
+  for (const message of eventMessages) {
+    merged.set(message.id, message);
+  }
+  for (const message of sdkMessages) {
+    const existing = merged.get(message.id);
+    if (!existing || message.content.length >= existing.content.length) {
+      merged.set(message.id, message);
+    }
+  }
+  return [...merged.values()];
 }
 
 async function fetchRunStatus(apiUrl: string, run: ActiveRun): Promise<string | null> {
@@ -491,7 +528,10 @@ export function App() {
   const [runCheckpointSnapshots, setRunCheckpointSnapshots] = useState<Record<string, RunCheckpointSnapshot>>({});
   const joinedRunIds = useRef(new Set<string>());
   const activeRunRef = useRef<ActiveRun | null>(null);
+  const currentRunIdRef = useRef<string | null>(null);
   const isLoadingRef = useRef(false);
+  const threadIdRef = useRef<string | null>(threadId);
+  const threadRequestSeqRef = useRef(0);
   const pendingThreadTitleRef = useRef("New research");
   const loggedMessageTextRef = useRef(new Map<string, string>());
   const messagesViewportRef = useRef<HTMLDivElement | null>(null);
@@ -505,6 +545,8 @@ export function App() {
     threadId,
     (nextThreadId) => {
       logger.info("stream.thread.received", { threadId: nextThreadId });
+      threadIdRef.current = nextThreadId;
+      threadRequestSeqRef.current += 1;
       setThreadId(nextThreadId);
       localStorage.setItem(CURRENT_THREAD_KEY, nextThreadId);
       writeThreadUrl(nextThreadId, true);
@@ -515,6 +557,14 @@ export function App() {
     (run) => {
       const now = new Date().toISOString();
       logger.info("stream.run.current", { threadId: run.thread_id, runId: run.run_id });
+      if (run.thread_id !== threadIdRef.current) {
+        logger.info("stream.run.current.ignored.staleThread", {
+          currentThreadId: threadIdRef.current,
+          runThreadId: run.thread_id,
+          runId: run.run_id,
+        });
+        return;
+      }
       setCurrentRunId(run.run_id);
       setRuns((current) => [
         {
@@ -529,9 +579,10 @@ export function App() {
     },
   );
   switchThreadRef.current = stream.switchThread;
+  const visibleActiveRun = activeRun?.threadId === threadId ? activeRun : null;
 
   const liveRunSubagentCards = useMemo(
-    () => subagentCardsForLiveRun(stream.debugEvents, currentRunId, stream.subagents, currentRunId),
+    () => subagentCardsForLiveRun(stream.debugEvents, currentRunId, stream.subagents),
     [currentRunId, stream],
   );
   const liveRunActions = useMemo(
@@ -539,14 +590,19 @@ export function App() {
     [currentRunId, stream.debugEvents],
   );
   const inputRequests = useMemo(
-    () => (currentRunId !== null && activeRun === null ? selectInputRequests(stream) : []),
-    [activeRun, currentRunId, stream],
+    () => (currentRunId !== null && visibleActiveRun === null ? selectInputRequests(stream) : []),
+    [visibleActiveRun, currentRunId, stream],
   );
   const runsInMessageOrder = useMemo(
-    () => [...runs].sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
-    [runs],
+    () =>
+      runs
+        .filter((run) => !threadId || run.threadId === threadId)
+        .sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
+    [runs, threadId],
   );
-  const currentRun = currentRunId ? runs.find((run) => run.runId === currentRunId) ?? null : null;
+  const currentRun = currentRunId
+    ? runs.find((run) => run.runId === currentRunId && (!threadId || run.threadId === threadId)) ?? null
+    : null;
   const currentRunStatus = currentRun?.status ?? null;
   const currentRunSnapshotLoaded = currentRunId ? Boolean(runCheckpointSnapshots[currentRunId]) : false;
   const persistedMessageEntries = useMemo(
@@ -592,6 +648,7 @@ export function App() {
     persistedMessages,
     visibleMessages,
   ]);
+  
   const displayedMessages = useMemo(
     () => displayedMessageEntries.map((entry) => entry.message),
     [displayedMessageEntries],
@@ -682,28 +739,56 @@ export function App() {
     }
   }
 
-  async function refreshRuns(nextThreadId = threadId): Promise<void> {
+  async function refreshRuns(
+    nextThreadId = threadId,
+    options: { requestSeq?: number; signal?: AbortSignal } = {},
+  ): Promise<void> {
+    const requestSeq = options.requestSeq ?? threadRequestSeqRef.current;
     if (!nextThreadId) {
-      setRuns([]);
+      if (threadIdRef.current === null && requestSeq === threadRequestSeqRef.current) {
+        setRuns([]);
+      }
       return;
     }
     try {
-      const next = await listRuns(apiUrl, nextThreadId);
+      const next = await listRuns(apiUrl, nextThreadId, options.signal);
+      if (
+        options.signal?.aborted ||
+        threadIdRef.current !== nextThreadId ||
+        requestSeq !== threadRequestSeqRef.current
+      ) {
+        logger.info("runs.refresh.ignored.staleThread", {
+          requestThreadId: nextThreadId,
+          currentThreadId: threadIdRef.current,
+          requestSeq,
+          currentSeq: threadRequestSeqRef.current,
+        });
+        return;
+      }
       setRuns(next);
       logger.info("runs.refresh.complete", { threadId: nextThreadId, count: next.length });
     } catch (caught) {
+      if (options.signal?.aborted || (caught instanceof DOMException && caught.name === "AbortError")) {
+        logger.debug("runs.refresh.aborted", { threadId: nextThreadId });
+        return;
+      }
       logger.error("runs.refresh.failed", {
         threadId: nextThreadId,
         message: caught instanceof Error ? caught.message : String(caught),
       });
-      setRuns([]);
+      if (threadIdRef.current === nextThreadId && requestSeq === threadRequestSeqRef.current) {
+        setRuns([]);
+      }
     }
   }
 
   function resetVisibleThread(nextThreadId: string | null): void {
+    threadIdRef.current = nextThreadId;
+    threadRequestSeqRef.current += 1;
     setActiveRun(null);
     setVisibleMessages([]);
     setOptimisticMessages([]);
+    setRuns([]);
     setCurrentRunId(null);
     setRunCheckpointSnapshots({});
     loggedMessageTextRef.current.clear();
@@ -800,11 +885,27 @@ export function App() {
         setActiveRun(null);
         return;
       }
+      if (threadIdRef.current !== run.threadId) {
+        logger.info("activeRun.continue.skipped.staleThread", {
+          currentThreadId: threadIdRef.current,
+          runThreadId: run.threadId,
+          runId: run.runId,
+        });
+        return;
+      }
       const response = await fetch(`${apiUrl}/threads/${run.threadId}/runs/${run.runId}/resume`, {
         method: "POST",
       });
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+      }
+      if (threadIdRef.current !== run.threadId) {
+        logger.info("activeRun.continue.join.skipped.staleThread", {
+          currentThreadId: threadIdRef.current,
+          runThreadId: run.threadId,
+          runId: run.runId,
+        });
+        return;
       }
       joinedRunIds.current.add(run.runId);
       setActiveRun(null);
@@ -995,7 +1096,9 @@ export function App() {
   useEffect(() => {
     activeRunRef.current = activeRun;
     isLoadingRef.current = stream.isLoading;
-  }, [activeRun, stream.isLoading]);
+    currentRunIdRef.current = currentRunId;
+    threadIdRef.current = threadId;
+  }, [activeRun, currentRunId, stream.isLoading, threadId]);
 
   useEffect(() => {
     if (stream.error) {
@@ -1045,7 +1148,13 @@ export function App() {
   }, [apiUrl]);
 
   useEffect(() => {
-    void refreshRuns();
+    const requestSeq = threadRequestSeqRef.current;
+    const controller = new AbortController();
+    void refreshRuns(threadId, { requestSeq, signal: controller.signal });
+    return () => {
+      controller.abort();
+    };
+    // refreshRuns intentionally reads the latest refs for stale-response guards.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiUrl, threadId]);
 
@@ -1053,8 +1162,11 @@ export function App() {
     if (!threadId) {
       return undefined;
     }
+    const requestThreadId = threadId;
+    const requestSeq = threadRequestSeqRef.current;
     const missingRuns = runs.filter(
       (run) =>
+        run.threadId === requestThreadId &&
         PERSISTED_RUN_STATUSES.has(run.status) &&
         !runCheckpointSnapshots[run.runId],
     );
@@ -1062,29 +1174,58 @@ export function App() {
       return undefined;
     }
     let cancelled = false;
-    void Promise.all(missingRuns.map((run) => getRunCheckpointSnapshot(apiUrl, threadId, run.runId)))
+    const controller = new AbortController();
+    void Promise.all(
+      missingRuns.map((run) =>
+        getRunCheckpointSnapshot(apiUrl, run.threadId, run.runId, controller.signal),
+      ),
+    )
       .then((snapshots) => {
-        if (cancelled) {
+        if (
+          cancelled ||
+          controller.signal.aborted ||
+          threadIdRef.current !== requestThreadId ||
+          requestSeq !== threadRequestSeqRef.current
+        ) {
+          logger.info("runs.checkpoints.load.ignored.staleThread", {
+            requestThreadId,
+            currentThreadId: threadIdRef.current,
+            requestSeq,
+            currentSeq: threadRequestSeqRef.current,
+            count: missingRuns.length,
+          });
           return;
         }
+        const currentThreadSnapshots = snapshots.filter((snapshot) => snapshot.run.threadId === requestThreadId);
         setRunCheckpointSnapshots((current) => ({
           ...current,
-          ...Object.fromEntries(snapshots.map((snapshot) => [snapshot.run.runId, snapshot])),
+          ...Object.fromEntries(currentThreadSnapshots.map((snapshot) => [snapshot.run.runId, snapshot])),
         }));
       })
       .catch((caught) => {
-        if (cancelled) {
+        if (
+          cancelled ||
+          controller.signal.aborted ||
+          (caught instanceof DOMException && caught.name === "AbortError")
+        ) {
+          logger.debug("runs.checkpoints.load.aborted", {
+            threadId: requestThreadId,
+            count: missingRuns.length,
+          });
           return;
         }
         logger.error("runs.checkpoints.load.failed", {
-          threadId,
+          threadId: requestThreadId,
           count: missingRuns.length,
           message: caught instanceof Error ? caught.message : String(caught),
         });
-        setError(caught instanceof Error ? caught.message : "Unable to load run checkpoints.");
+        if (threadIdRef.current === requestThreadId && requestSeq === threadRequestSeqRef.current) {
+          setError(caught instanceof Error ? caught.message : "Unable to load run checkpoints.");
+        }
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [apiUrl, runCheckpointSnapshots, runs, threadId]);
 
@@ -1092,11 +1233,15 @@ export function App() {
     const handlePopState = (): void => {
       const nextThreadId = threadIdFromUrl();
       logger.info("thread.url.popstate", { threadId: nextThreadId });
+      threadIdRef.current = nextThreadId;
+      threadRequestSeqRef.current += 1;
       setActiveRun(null);
       setVisibleMessages([]);
       setOptimisticMessages([]);
+      setRuns([]);
       setCurrentRunId(null);
       setRunCheckpointSnapshots({});
+      stream.clearDebugEvents();
       joinedRunIds.current.clear();
       switchThreadRef.current?.(nextThreadId);
       setThreadId(nextThreadId);
@@ -1143,16 +1288,6 @@ export function App() {
   }, [activeRun, apiUrl]);
 
   useEffect(() => {
-    if (!activeRun || stream.isLoading || joinedRunIds.current.has(activeRun.runId)) {
-      return;
-    }
-    logger.info("activeRun.banner.autoJoin", activeRun);
-    void continueActiveRun(activeRun);
-    // continueActiveRun intentionally owns the resume/join side effects.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeRun, stream.isLoading]);
-
-  useEffect(() => {
     if (!currentRunId || stream.isLoading) {
       return;
     }
@@ -1187,15 +1322,12 @@ export function App() {
     }
 
     let cancelled = false;
-    const showActiveRun = (runId: string, source: string): void => {
+    const controller = new AbortController();
+    const showActiveRun = async (runId: string, source: string): Promise<void> => {
       if (!runId || cancelled) {
         return;
       }
-      if (isLoadingRef.current) {
-        logger.debug("activeRunMonitor.skipped.loading", { threadId, runId, source });
-        return;
-      }
-      if (joinedRunIds.current.has(runId)) {
+      if (currentRunIdRef.current === runId || joinedRunIds.current.has(runId)) {
         logger.debug("activeRunMonitor.skipped.joined", { threadId, runId, source });
         return;
       }
@@ -1203,8 +1335,24 @@ export function App() {
         logger.debug("activeRunMonitor.skipped.bannerVisible", { threadId, runId, source });
         return;
       }
-      logger.info("activeRunMonitor.discovered", { threadId, runId, source });
-      setActiveRun((current) => current ?? { threadId, runId });
+      try {
+        const status = await fetchRunStatus(apiUrl, { threadId, runId });
+        if (cancelled || !ACTIVE_RUN_STATUSES.has(status ?? "")) {
+          logger.debug("activeRunMonitor.skipped.notActive", { threadId, runId, source, status });
+          return;
+        }
+        logger.info("activeRunMonitor.discovered", { threadId, runId, source, status });
+        setActiveRun((current) =>
+          current?.threadId === threadId && current.runId === runId ? current : { threadId, runId },
+        );
+      } catch (caught) {
+        logger.warn("activeRunMonitor.discovery.failed", {
+          threadId,
+          runId,
+          source,
+          message: caught instanceof Error ? caught.message : String(caught),
+        });
+      }
     };
 
     const clearActiveRun = (runId: string, source: string): void => {
@@ -1217,7 +1365,9 @@ export function App() {
     const checkActiveRunOnce = async (): Promise<void> => {
       try {
         logger.debug("activeRunMonitor.initialCheck.start", { threadId });
-        const response = await fetch(`${apiUrl}/threads/${threadId}/runs?limit=1&status=running`);
+        const response = await fetch(`${apiUrl}/threads/${threadId}/runs?limit=20`, {
+          signal: controller.signal,
+        });
         if (response.status === 404) {
           logger.warn("activeRunMonitor.threadMissing", { threadId });
           joinedRunIds.current.clear();
@@ -1234,14 +1384,19 @@ export function App() {
           });
           return;
         }
-        const runs = (await response.json()) as Array<{ run_id?: string }>;
-        const runId = runs[0]?.run_id;
+        const runs = (await response.json()) as Array<{ run_id?: string; status?: string }>;
+        const active = runs.find((run) => ACTIVE_RUN_STATUSES.has(run.status ?? ""));
+        const runId = active?.run_id;
         if (runId) {
-          showActiveRun(runId, "initial-check");
+          void showActiveRun(runId, "initial-check");
         } else {
           logger.debug("activeRunMonitor.initialCheck.none", { threadId });
         }
-      } catch {
+      } catch (caught) {
+        if (controller.signal.aborted || (caught instanceof DOMException && caught.name === "AbortError")) {
+          logger.debug("activeRunMonitor.initialCheck.aborted", { threadId });
+          return;
+        }
         logger.warn("activeRunMonitor.initialCheck.error", { threadId });
       }
     };
@@ -1258,7 +1413,7 @@ export function App() {
         const data = JSON.parse(event.data) as { event?: unknown; run_id?: unknown };
         const runId = typeof data.run_id === "string" ? data.run_id : "";
         if (data.event === "running") {
-          showActiveRun(runId, "lifecycle");
+          void showActiveRun(runId, "lifecycle");
         }
         if (typeof data.event === "string" && TERMINAL_RUN_EVENTS.has(data.event)) {
           clearActiveRun(runId, "lifecycle");
@@ -1274,6 +1429,7 @@ export function App() {
 
     return () => {
       cancelled = true;
+      controller.abort();
       logger.info("activeRunMonitor.lifecycle.unsubscribe", { threadId });
       source.close();
     };
@@ -1396,16 +1552,16 @@ export function App() {
 
           {inputRequests.length > 0 && <InputRequests requests={inputRequests} onResume={resume} />}
 
-          {activeRun && (
+          {visibleActiveRun && (
             <div className="active-run-banner">
               <div>
                 <strong>Active run found</strong>
-                <span>{activeRun.runId.slice(0, 8)} can continue from its saved checkpoint or be stopped.</span>
+                <span>{visibleActiveRun.runId.slice(0, 8)} can continue from its saved checkpoint or be stopped.</span>
               </div>
-              <button onClick={() => void continueActiveRun(activeRun)} type="button">
+              <button onClick={() => void continueActiveRun(visibleActiveRun)} type="button">
                 Continue streaming
               </button>
-              <button className="secondary" onClick={() => void stopActiveRun(activeRun)} type="button">
+              <button className="secondary" onClick={() => void stopActiveRun(visibleActiveRun)} type="button">
                 Stop run
               </button>
             </div>
@@ -1432,7 +1588,7 @@ export function App() {
                 }
               }}
             />
-            <button disabled={!draft.trim() || stream.isLoading || activeRun !== null} type="submit" title="Send">
+            <button disabled={!draft.trim() || stream.isLoading || visibleActiveRun !== null} type="submit" title="Send">
               {stream.isLoading ? <Loader2 className="spin" size={18} /> : <Send size={18} />}
             </button>
           </form>
@@ -1535,29 +1691,52 @@ function SubagentCardView({
   subagent: SubagentCard;
   variant?: "panel" | "inline";
 }) {
-  const visibleMessages = subagent.messages.filter((message) => message.content.trim()).slice(-3);
+  const taskInput = subagent.description.trim() || "Subagent task";
+  const toolActions = subagent.tools.map((tool) => ({
+    id: tool.id,
+    label: actionFromTool(tool.name, tool.input),
+    status: tool.status,
+  }));
+  const visibleMessages = subagent.messages.filter((message) => message.content.trim());
   return (
     <article className={`subagent-card ${subagent.status} ${variant}`}>
       <header>
         <div>
           <strong>{subagent.name}</strong>
-          <small>{subagent.description}</small>
         </div>
         <span>{subagent.status}</span>
       </header>
       <div className="progress">
         <div style={{ width: `${subagent.progress}%` }} />
       </div>
-      <div className="subagent-meta">
-        <span>{subagent.messages.length} messages</span>
-        <span>{subagent.tools.length} tools</span>
-      </div>
-      <div className="subagent-stream">
-        {visibleMessages.map((message) => (
-          <p className={message.status === "streaming" ? "streaming" : undefined} key={message.id}>
-            {message.content}
-          </p>
-        ))}
+      <div className="subagent-sections">
+        <section className="subagent-section subagent-input">
+          <h4>Input</h4>
+          <p>{taskInput}</p>
+        </section>
+        <section className="subagent-section subagent-activity">
+          <h4>Actions</h4>
+          {toolActions.length > 0 ? (
+            toolActions.map((action) => (
+              <div className={`action-row ${action.status}`} key={action.id}>
+                <span />
+                <strong>{action.label}</strong>
+              </div>
+            ))
+          ) : (
+            <p className="muted">Waiting for tool activity...</p>
+          )}
+          <h4>Messages</h4>
+          {visibleMessages.length > 0 ? (
+            visibleMessages.map((message) => (
+              <p className={message.status === "streaming" ? "streaming" : undefined} key={message.id}>
+                {message.content}
+              </p>
+            ))
+          ) : (
+            <p className="muted">Waiting for streamed output...</p>
+          )}
+        </section>
       </div>
     </article>
   );

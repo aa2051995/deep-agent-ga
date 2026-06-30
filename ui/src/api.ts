@@ -198,9 +198,9 @@ function subagentCard(value: unknown): SubagentCard | null {
   return raw as unknown as SubagentCard;
 }
 
-export async function listRuns(apiUrl: string, threadId: string): Promise<RunSummary[]> {
+export async function listRuns(apiUrl: string, threadId: string, signal?: AbortSignal): Promise<RunSummary[]> {
   logger.info("api.runs.list.start", { threadId });
-  const response = await fetch(`${apiUrl}/threads/${threadId}/runs?limit=100`);
+  const response = await fetch(`${apiUrl}/threads/${threadId}/runs?limit=100`, { signal });
   if (!response.ok) {
     logger.error("api.runs.list.failed", { threadId, status: response.status });
     throw new Error(`Failed to list runs: ${response.statusText}`);
@@ -217,9 +217,10 @@ export async function getRunCheckpointSnapshot(
   apiUrl: string,
   threadId: string,
   runId: string,
+  signal?: AbortSignal,
 ): Promise<RunCheckpointSnapshot> {
   logger.info("api.runs.checkpoints.start", { threadId, runId });
-  const response = await fetch(`${apiUrl}/threads/${threadId}/runs/${runId}/checkpoints`);
+  const response = await fetch(`${apiUrl}/threads/${threadId}/runs/${runId}/checkpoints`, { signal });
   if (!response.ok) {
     logger.error("api.runs.checkpoints.failed", { threadId, runId, status: response.status });
     throw new Error(`Failed to load run checkpoints: ${response.statusText}`);

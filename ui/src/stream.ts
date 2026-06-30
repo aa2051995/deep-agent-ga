@@ -143,6 +143,20 @@ export function useDeepResearchStream(
         }),
       );
     },
+    onMessageEvent: (data: unknown, options: EventOptions) => {
+      logger.debug("stream.event.messages", {
+        namespace: normalizeNamespace(options),
+        shape: typeof data,
+      });
+      setDebugEvents((events) =>
+        appendDebugEvent(events, {
+          id: eventId("messages", data),
+          channel: "messages",
+          namespace: normalizeNamespace(options),
+          data,
+        }),
+      );
+    },
     onCheckpointEvent: (data: unknown, options: EventOptions) => {
       logger.debug("stream.event.checkpoints", {
         namespace: normalizeNamespace(options),
