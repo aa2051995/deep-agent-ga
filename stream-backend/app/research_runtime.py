@@ -19,6 +19,129 @@ class ResearchRuntimeUnavailable(RuntimeError):
     pass
 
 
+def optional_float_env(name: str) -> float | None:
+    value = os.getenv(name)
+    if value in {None, ""}:
+        return None
+    try:
+        return float(value)
+    except ValueError as exc:
+        msg = f"{name} must be a number."
+        raise ResearchRuntimeUnavailable(msg) from exc
+
+
+def bedrock_model_looks_like_id(model: str) -> bool:
+    return "." in model or ":" in model or "/" in model
+
+
+def resolve_bedrock_model_id(
+    model: str,
+    *,
+    region: str | None,
+    profile: str | None,
+    endpoint_url: str | None,
+) -> str:
+    if bedrock_model_looks_like_id(model):
+        return model
+    try:
+        import boto3
+    except Exception as exc:  # pragma: no cover - environment dependent
+        msg = (
+            f"Bedrock model '{model}' is a display name, not a model ID. "
+            "Install boto3 or set RESEARCH_AGENT_MODEL/AWS_BEDROCK_MODEL_ID "
+            "to an exact Bedrock model identifier."
+        )
+        raise ResearchRuntimeUnavailable(msg) from exc
+
+    try:
+        session_kwargs = {"profile_name": profile} if profile else {}
+        session = boto3.Session(**session_kwargs)
+        client_kwargs: dict[str, str] = {}
+        if region:
+            client_kwargs["region_name"] = region
+        if endpoint_url:
+            client_kwargs["endpoint_url"] = endpoint_url
+        client = session.client("bedrock", **client_kwargs)
+        response = client.list_foundation_models()
+    except Exception as exc:  # pragma: no cover - requires AWS access
+        msg = (
+            f"Bedrock model '{model}' is a display name, not a model ID, and "
+            f"the backend could not list Bedrock models to resolve it: {exc}. "
+            "Set RESEARCH_AGENT_MODEL or AWS_BEDROCK_MODEL_ID to the exact "
+            "Bedrock model identifier from your AWS account/region."
+        )
+        raise ResearchRuntimeUnavailable(msg) from exc
+
+    normalized = model.casefold().replace(" ", "").replace("-", "")
+    matches = []
+    for summary in response.get("modelSummaries", []):
+        model_id = str(summary.get("modelId") or "")
+        model_name = str(summary.get("modelName") or "")
+        provider_name = str(summary.get("providerName") or "")
+        candidates = [model_id, model_name, f"{provider_name} {model_name}"]
+        if any(normalized in candidate.casefold().replace(" ", "").replace("-", "") for candidate in candidates):
+            matches.append(model_id)
+    matches = [match for match in matches if match]
+    if len(matches) == 1:
+        logger.info("bedrock.model.resolved display_name=%s model_id=%s", model, matches[0])
+        return matches[0]
+    if matches:
+        msg = (
+            f"Bedrock model display name '{model}' matched multiple model IDs: "
+            f"{', '.join(matches)}. Set RESEARCH_AGENT_MODEL to the exact ID."
+        )
+        raise ResearchRuntimeUnavailable(msg)
+    msg = (
+        f"Bedrock model display name '{model}' was not found in region "
+        f"{region or '<default>'}. Set RESEARCH_AGENT_MODEL or AWS_BEDROCK_MODEL_ID "
+        "to an exact model identifier available in that AWS region."
+    )
+    raise ResearchRuntimeUnavailable(msg)
+
+
+def bedrock_model_kwargs() -> dict[str, Any]:
+    raw_model = os.getenv("AWS_BEDROCK_MODEL_ID") or os.getenv("RESEARCH_AGENT_MODEL")
+    if not raw_model:
+        msg = (
+            "RESEARCH_AGENT_PROVIDER=bedrock requires RESEARCH_AGENT_MODEL "
+            "or AWS_BEDROCK_MODEL_ID."
+        )
+        raise ResearchRuntimeUnavailable(msg)
+
+    region = (
+        os.getenv("RESEARCH_AGENT_AWS_REGION")
+        or os.getenv("AWS_BEDROCK_REGION")
+        or os.getenv("AWS_REGION")
+        or os.getenv("AWS_DEFAULT_REGION")
+    )
+    profile = os.getenv("AWS_PROFILE") or os.getenv("AWS_BEDROCK_PROFILE")
+    endpoint_url = os.getenv("AWS_BEDROCK_ENDPOINT_URL")
+    model = resolve_bedrock_model_id(
+        raw_model,
+        region=region,
+        profile=profile,
+        endpoint_url=endpoint_url,
+    )
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "temperature": optional_float_env("RESEARCH_AGENT_TEMPERATURE") or 0.0,
+    }
+    if region:
+        kwargs["region_name"] = region
+    if profile:
+        kwargs["credentials_profile_name"] = profile
+    if endpoint_url:
+        kwargs["endpoint_url"] = endpoint_url
+    max_tokens = optional_float_env("RESEARCH_AGENT_MAX_TOKENS")
+    if max_tokens is not None:
+        kwargs["max_tokens"] = int(max_tokens)
+    return kwargs
+
+
+def provider_from_env() -> str:
+    return os.getenv("RESEARCH_AGENT_PROVIDER", "google").strip().lower()
+
+
 def namespace_from_metadata(metadata: dict[str, Any] | None) -> list[str]:
     if not metadata:
         return []
@@ -166,7 +289,7 @@ class ResearchDeepAgentRunner:
                 "tools": [tavily_search, think_tool],
             }
 
-            provider = os.getenv("RESEARCH_AGENT_PROVIDER", "google").lower()
+            provider = provider_from_env()
             logger.info(
                 "agent.ensure.configure provider=%s max_units=%s max_iterations=%s",
                 provider,
@@ -181,6 +304,25 @@ class ResearchDeepAgentRunner:
                     ),
                     temperature=0.0,
                 )
+            elif provider in {"bedrock", "aws-bedrock", "aws_bedrock"}:
+                try:
+                    from langchain_aws import ChatBedrockConverse
+                except Exception as exc:  # pragma: no cover - environment dependent
+                    msg = (
+                        "Install langchain-aws and configure AWS credentials to use "
+                        "RESEARCH_AGENT_PROVIDER=bedrock."
+                    )
+                    logger.exception("agent.ensure.bedrock_import.failed")
+                    raise ResearchRuntimeUnavailable(msg) from exc
+                model_kwargs = bedrock_model_kwargs()
+                logger.info(
+                    "agent.ensure.bedrock.configure model=%s region=%s profile=%s endpoint=%s",
+                    model_kwargs.get("model"),
+                    model_kwargs.get("region_name"),
+                    bool(model_kwargs.get("credentials_profile_name")),
+                    bool(model_kwargs.get("endpoint_url")),
+                )
+                model = ChatBedrockConverse(**model_kwargs)
             else:
                 model = ChatGoogleGenerativeAI(
                     model=os.getenv("RESEARCH_AGENT_MODEL", "gemini-2.5-pro"),

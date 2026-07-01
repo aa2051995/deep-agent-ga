@@ -84,6 +84,39 @@ $env:RESEARCH_AGENT_MODEL = "anthropic:claude-sonnet-4-5-20250929"
 $env:ANTHROPIC_API_KEY = "..."
 ```
 
+AWS Bedrock is also supported through `langchain-aws`:
+
+```powershell
+$env:RESEARCH_AGENT_PROVIDER = "bedrock"
+$env:RESEARCH_AGENT_MODEL = "<your-bedrock-model-id>"
+$env:AWS_REGION = "us-east-1"
+# Optional if you do not use default AWS credential resolution:
+$env:AWS_PROFILE = "my-profile"
+# Optional Bedrock API key auth:
+$env:AWS_BEARER_TOKEN_BEDROCK = "<your-bedrock-api-key>"
+```
+
+`RESEARCH_AGENT_MODEL` must be the Bedrock model ID, not the console display
+name. To find available model IDs in your configured region:
+
+```powershell
+aws bedrock list-foundation-models --region $env:AWS_REGION --query "modelSummaries[].{name:modelName,id:modelId}" --output table
+```
+
+If you accidentally set a display name such as `Kimi K2.5`, the backend will
+try to resolve it from `list-foundation-models`. If it cannot find exactly one
+match, it will fail before the run starts with a clearer configuration error.
+
+The backend also accepts `AWS_BEDROCK_MODEL_ID`,
+`RESEARCH_AGENT_AWS_REGION`, `AWS_BEDROCK_REGION`,
+`AWS_BEDROCK_PROFILE`, `AWS_BEDROCK_ENDPOINT_URL`,
+`AWS_BEARER_TOKEN_BEDROCK`, `RESEARCH_AGENT_TEMPERATURE`,
+and `RESEARCH_AGENT_MAX_TOKENS`.
+
+Do not commit real AWS keys or bearer tokens. Set
+`AWS_BEARER_TOKEN_BEDROCK` in your shell, a local ignored `.env`, or your
+deployment secret manager.
+
 The real agent is built like this:
 
 - coordinator prompt = `RESEARCH_WORKFLOW_INSTRUCTIONS` +
@@ -92,7 +125,7 @@ The real agent is built like this:
 - subagent prompt = `RESEARCHER_INSTRUCTIONS.format(date=current_date)`
 - tools = `tavily_search`, `think_tool`
 - model = `ChatGoogleGenerativeAI(model="gemini-2.5-pro", temperature=0.0)`
-  unless Anthropic mode is selected
+  unless Anthropic or Bedrock mode is selected
 
 ## Postgres
 

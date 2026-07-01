@@ -58,6 +58,12 @@ type DisplayedMessageEntry = {
 const loggedLiveSubagentTaskIds = new Set<string>();
 const ACTIVE_RUN_STATUSES = new Set(["pending", "running"]);
 const TERMINAL_RUN_EVENTS = new Set(["completed", "failed", "interrupted", "timeout"]);
+const TERMINAL_EVENT_TO_RUN_STATUS: Record<string, string> = {
+  completed: "success",
+  failed: "error",
+  interrupted: "interrupted",
+  timeout: "timeout",
+};
 const PERSISTED_RUN_STATUSES = new Set(["success", "error", "interrupted", "timeout"]);
 
 function threadIdFromUrl(): string | null {
@@ -241,12 +247,16 @@ function actionRowsFromEvents(events: DebugEvent[], runId: string | null): RunAc
     if (runId !== null && data.run_id !== runId) {
       continue;
     }
-    const toolId = String(data.tool_call_id ?? data.id ?? event.id);
+    const toolId = String(data.tool_call_id ?? data.toolCallId ?? data.id ?? event.id);
     const name = stringValue(data.name ?? data.tool_name);
     if (!name) {
       continue;
     }
-    const status = String(data.event ?? "").includes("finish") ? "done" : "running";
+    const toolEvent = String(data.event ?? "");
+    const status =
+      toolEvent.includes("finish") || toolEvent.includes("end")
+        ? "done"
+        : "running";
     const existing = actions.get(toolId);
     actions.set(toolId, {
       id: toolId,
@@ -350,6 +360,10 @@ function subagentCardsFromEvents(events: ProtocolEvent[]): SubagentCard[] {
         }
         card.description = String(input.description ?? card.description);
         card.name = String(input.subagent_type ?? card.name);
+        if (String(data.event ?? "").includes("finish") || String(data.event ?? "").includes("end")) {
+          card.status = "done";
+          card.progress = 100;
+        }
       } else {
         const existingTool = card.tools.find((tool) => tool.id === toolId);
         const tool = existingTool ?? {
@@ -411,7 +425,7 @@ function subagentCardsFromEvents(events: ProtocolEvent[]): SubagentCard[] {
       if (messageEvent === "content-block-delta" || messageEvent === "content-block-finish") {
         const content = typeof data.content === "object" && data.content !== null ? data.content as Record<string, unknown> : {};
         const text = typeof content.text === "string" ? content.text : "";
-        const messageId = activeMessageIds.get(key) ?? `${key}-${event.seq}`;
+        const messageId = activeMessageIds.get(key) ?? `${key}-live`;
         let message = card.messages.find((item) => item.id === messageId);
         if (!message) {
           message = {
@@ -532,6 +546,7 @@ export function App() {
   const isLoadingRef = useRef(false);
   const threadIdRef = useRef<string | null>(threadId);
   const threadRequestSeqRef = useRef(0);
+  const handledTerminalRunIdsRef = useRef(new Set<string>());
   const pendingThreadTitleRef = useRef("New research");
   const loggedMessageTextRef = useRef(new Map<string, string>());
   const messagesViewportRef = useRef<HTMLDivElement | null>(null);
@@ -910,6 +925,10 @@ export function App() {
       joinedRunIds.current.add(run.runId);
       setActiveRun(null);
       setCurrentRunId(run.runId);
+      setRunCheckpointSnapshots((current) => {
+        const { [run.runId]: _staleSnapshot, ...rest } = current;
+        return rest;
+      });
       setRuns((current) => {
         const now = new Date().toISOString();
         const existing = current.find((item) => item.runId === run.runId);
@@ -1299,6 +1318,48 @@ export function App() {
       setCurrentRunId(null);
     }
   }, [currentRunId, currentRunSnapshotLoaded, currentRunStatus, stream.isLoading, threadId]);
+
+  useEffect(() => {
+    if (!threadId || !currentRunId || handledTerminalRunIdsRef.current.has(currentRunId)) {
+      return;
+    }
+    const terminalEvent = stream.debugEvents.find((event) => {
+      if (event.channel !== "lifecycle" || typeof event.data !== "object" || event.data === null) {
+        return false;
+      }
+      const data = event.data as Record<string, unknown>;
+      return data.run_id === currentRunId && TERMINAL_RUN_EVENTS.has(String(data.event ?? ""));
+    });
+    if (!terminalEvent || typeof terminalEvent.data !== "object" || terminalEvent.data === null) {
+      return;
+    }
+    const status = TERMINAL_EVENT_TO_RUN_STATUS[String((terminalEvent.data as Record<string, unknown>).event ?? "")];
+    handledTerminalRunIdsRef.current.add(currentRunId);
+    logger.info("activeRun.terminal.resetToPersisted", { threadId, runId: currentRunId, status });
+    joinedRunIds.current.delete(currentRunId);
+    setActiveRun((current) =>
+      current?.threadId === threadId && current.runId === currentRunId ? null : current,
+    );
+    setRuns((current) =>
+      current.map((run) =>
+        run.runId === currentRunId
+          ? { ...run, status: status ?? run.status, updatedAt: new Date().toISOString() }
+          : run,
+      ),
+    );
+    setVisibleMessages([]);
+    setOptimisticMessages([]);
+    setRunCheckpointSnapshots((current) => {
+      const { [currentRunId]: _staleSnapshot, ...rest } = current;
+      return rest;
+    });
+    loggedMessageTextRef.current.clear();
+    setCurrentRunId(null);
+    stream.clearDebugEvents();
+    void refreshRuns(threadId);
+    // refreshRuns intentionally owns async persisted reload after terminal lifecycle events.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentRunId, stream.debugEvents, threadId]);
 
   useEffect(() => {
     if (!threadId || stream.isLoading) {

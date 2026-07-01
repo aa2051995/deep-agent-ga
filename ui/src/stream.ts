@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useStream } from "@langchain/langgraph-sdk/react";
 import type {
   Message,
@@ -6,6 +6,7 @@ import type {
   UseDeepAgentStream,
 } from "@langchain/langgraph-sdk";
 import { logger } from "./logger";
+import type { ProtocolEvent } from "./types";
 
 export const DEFAULT_API_URL = "http://localhost:2024";
 export const ASSISTANT_ID = "deep-agent";
@@ -57,6 +58,46 @@ function appendDebugEvent(
   return [...previous, { ...event, timestamp: Date.now() }].slice(-250);
 }
 
+function debugEventFromProtocol(event: ProtocolEvent): Omit<DebugEvent, "timestamp"> {
+  return {
+    id: event.event_id,
+    channel: event.method,
+    namespace: event.params.namespace,
+    data: event.params.data,
+  };
+}
+
+function parseSseFrames(buffer: string): { frames: string[]; rest: string } {
+  const normalized = buffer.replace(/\r\n/g, "\n");
+  const parts = normalized.split("\n\n");
+  return { frames: parts.slice(0, -1), rest: parts.at(-1) ?? "" };
+}
+
+function protocolEventFromSse(frame: string): ProtocolEvent | null {
+  const eventLine = frame
+    .split("\n")
+    .find((line) => line.startsWith("data:"));
+  if (!eventLine) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(eventLine.slice("data:".length).trim()) as unknown;
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      "type" in parsed &&
+      (parsed as { type?: unknown }).type === "event"
+    ) {
+      return parsed as ProtocolEvent;
+    }
+  } catch (caught) {
+    logger.warn("stream.protocolEvent.parseFailed", {
+      message: caught instanceof Error ? caught.message : String(caught),
+    });
+  }
+  return null;
+}
+
 export function useDeepResearchStream(
   apiUrl: string,
   threadId: string | null,
@@ -65,6 +106,63 @@ export function useDeepResearchStream(
 ): DeepResearchStream {
   const [debugEvents, setDebugEvents] = useState<DebugEvent[]>([]);
   logger.debug("stream.hook.render", { apiUrl, threadId });
+
+  useEffect(() => {
+    if (!threadId) {
+      return undefined;
+    }
+    const controller = new AbortController();
+    const subscribe = async (): Promise<void> => {
+      try {
+        logger.info("stream.protocol.subscribe", { threadId });
+        const response = await fetch(`${apiUrl}/threads/${threadId}/stream/events`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            channels: ["tools", "messages", "lifecycle"],
+            depth: 99,
+          }),
+          signal: controller.signal,
+        });
+        if (!response.ok || !response.body) {
+          throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (!controller.signal.aborted) {
+          const { done, value } = await reader.read();
+          if (done) {
+            break;
+          }
+          buffer += decoder.decode(value, { stream: true });
+          const { frames, rest } = parseSseFrames(buffer);
+          buffer = rest;
+          for (const frame of frames) {
+            const event = protocolEventFromSse(frame);
+            if (!event) {
+              continue;
+            }
+            setDebugEvents((events) => appendDebugEvent(events, debugEventFromProtocol(event)));
+          }
+        }
+      } catch (caught) {
+        if (controller.signal.aborted || (caught instanceof DOMException && caught.name === "AbortError")) {
+          logger.debug("stream.protocol.aborted", { threadId });
+          return;
+        }
+        logger.warn("stream.protocol.failed", {
+          threadId,
+          message: caught instanceof Error ? caught.message : String(caught),
+        });
+      }
+    };
+    void subscribe();
+    return () => {
+      controller.abort();
+      logger.info("stream.protocol.unsubscribe", { threadId });
+    };
+  }, [apiUrl, threadId]);
 
   const streamOptions = {
     apiUrl,

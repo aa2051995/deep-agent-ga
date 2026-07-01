@@ -138,13 +138,17 @@ def create_repository():
     logger.info("repository.create.memory")
     return InMemoryRepository()
 
-os.environ["STREAM_BACKEND_STORE"] = "postgres"  # --- IGNORE ---
-os.environ["STREAM_BACKEND_POSTGRES_URI"] = "postgresql://postgres:am12345Eee@localhost:5432/myapp"  # --- IGNORE ---
-os.environ["RESEARCH_AGENT_MODEL"] = "gemini-2.5-pro"  # --- IGNORE ---
-os.environ["TAVILY_API_KEY"] = "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"
-os.environ["GOOGLE_API_KEY"] = "AIzaSyBx0JdmhyXdoufg23j2Ec69ej968-LSymU"  # --- IGNORE ---
-os.environ["STREAM_BACKEND_EVENT_BROKER"] = "rabbitmq"
-os.environ["RABBITMQ_STREAM_URL"] = "rabbitmq-stream://guest:guest@localhost:5552/"
+os.environ.setdefault("STREAM_BACKEND_STORE", "postgres")  # --- IGNORE ---
+os.environ.setdefault("STREAM_BACKEND_POSTGRES_URI", "postgresql://postgres:am12345Eee@localhost:5432/myapp")  # --- IGNORE ---
+os.environ.setdefault("RESEARCH_AGENT_PROVIDER", "bedrock")
+os.environ.setdefault("RESEARCH_AGENT_MODEL", "moonshotai.kimi-k2.5")
+os.environ.setdefault("AWS_REGION", "eu-north-1")
+os.environ.setdefault("AWS_BEDROCK_PROFILE", "my-profile")
+
+os.environ.setdefault("TAVILY_API_KEY", "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")
+os.environ.setdefault("GOOGLE_API_KEY", "AIzaSyBx0JdmhyXdoufg23j2Ec69ej968-LSymU")  # --- IGNORE ---
+os.environ.setdefault("STREAM_BACKEND_EVENT_BROKER", "rabbitmq")
+os.environ.setdefault("RABBITMQ_STREAM_URL", "rabbitmq-stream://guest:guest@localhost:5552/")
 
 base_repo = create_repository()
 event_broker = create_event_broker()
@@ -447,6 +451,7 @@ def project_subagents(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             outputs[call_id] = message
 
     subagents: list[dict[str, Any]] = []
+    seen_call_ids: set[str] = set()
     for message in messages:
         if not isinstance(message, dict) or message.get("type") != "ai":
             continue
@@ -457,6 +462,9 @@ def project_subagents(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if not isinstance(call, dict) or call.get("name") != "task":
                 continue
             call_id = str(call.get("id") or new_id())
+            if call_id in seen_call_ids:
+                continue
+            seen_call_ids.add(call_id)
             args = parse_tool_args(call.get("args"))
             output = outputs.get(call_id)
             output_text = message_content_text(output.get("content")) if output else ""
@@ -492,22 +500,33 @@ def project_subagents(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return subagents
 
 
+def previous_message_count_for_run(root_history: list[ThreadState], run: RunRecord) -> int:
+    states_by_checkpoint_id = {
+        state.checkpoint.checkpoint_id: state
+        for state in root_history
+        if state.checkpoint.checkpoint_id
+    }
+    run_states = [state for state in root_history if state_run_id(state) == run.run_id]
+    first = run_states[0] if run_states else None
+    if first is None:
+        return 0
+
+    parent = first.parent_checkpoint
+    while parent is not None:
+        parent_state = states_by_checkpoint_id.get(parent.checkpoint_id)
+        if parent_state is None:
+            return 0
+        if state_run_id(parent_state) != run.run_id:
+            return len(state_messages(parent_state))
+        parent = parent_state.parent_checkpoint
+    return max(len(state_messages(first)) - 1, 0)
+
+
 def project_run_checkpoints(run: RunRecord, history: list[ThreadState]) -> dict[str, Any]:
     root_history = [state for state in reversed(history) if is_root_checkpoint(state)]
     run_states = [state for state in root_history if state_run_id(state) == run.run_id]
     latest = run_states[-1] if run_states else None
-    first = run_states[0] if run_states else None
-    previous_count = 0
-    if first and first.parent_checkpoint:
-        parent_id = first.parent_checkpoint.checkpoint_id
-        parent = next(
-            (state for state in root_history if state.checkpoint.checkpoint_id == parent_id),
-            None,
-        )
-        previous_count = len(state_messages(parent)) if parent else 0
-    elif first:
-        previous_count = max(len(state_messages(first)) - 1, 0)
-
+    previous_count = previous_message_count_for_run(root_history, run)
     all_messages = state_messages(latest) if latest else []
     run_messages = all_messages[previous_count:]
     visible_messages = [
