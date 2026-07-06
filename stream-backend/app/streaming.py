@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import Request
 
@@ -15,6 +16,46 @@ from .protocol import matches_subscription
 from .store import Repository
 
 logger = logging.getLogger("stream_backend.streaming")
+
+
+@dataclass
+class RunHandle:
+    """Tracks a run's streaming handle for ack/retry operations."""
+
+    thread_id: str
+    run_id: str
+    subscription_id: str
+    created_at: float = field(default_factory=time.time)
+    retry_count: int = 0
+    last_retry_at: float | None = None
+    max_retries: int = 3
+    status: Literal["active", "completed", "failed", "cancelled"] = "active"
+
+    def can_retry(self) -> bool:
+        """Check if this handle can be retried."""
+        return self.status == "active" and self.retry_count < self.max_retries
+
+    def record_retry(self) -> None:
+        """Record a retry attempt."""
+        self.retry_count += 1
+        self.last_retry_at = time.time()
+
+    def mark_completed(self) -> None:
+        """Mark the handle as completed."""
+        self.status = "completed"
+
+    def mark_failed(self) -> None:
+        """Mark the handle as failed."""
+        self.status = "failed"
+
+    def mark_cancelled(self) -> None:
+        """Mark the handle as cancelled."""
+        self.status = "cancelled"
+
+    @property
+    def age_seconds(self) -> float:
+        """Return the age of this handle in seconds."""
+        return time.time() - self.created_at
 
 
 @dataclass(frozen=True)
@@ -81,11 +122,19 @@ class StreamSubscriptionManager:
         self.repo = repo
         self.broker = broker
         self._active_subscriptions: dict[str, ManagedThreadSubscription] = {}
+        self._run_handles: dict[str, RunHandle] = {}
         self._lock = asyncio.Lock()
 
     async def register_subscription(self, managed: ManagedThreadSubscription) -> None:
         async with self._lock:
             self._active_subscriptions[managed.subscription_id] = managed
+            if managed.run_id:
+                handle = RunHandle(
+                    thread_id=managed.thread_id,
+                    run_id=managed.run_id,
+                    subscription_id=managed.subscription_id,
+                )
+                self._run_handles[managed.run_id] = handle
             logger.info(
                 "stream.subscription.registered thread_id=%s subscription_id=%s run_id=%s",
                 managed.thread_id,
@@ -97,11 +146,73 @@ class StreamSubscriptionManager:
         async with self._lock:
             managed = self._active_subscriptions.pop(subscription_id, None)
             if managed is not None:
+                if managed.run_id and managed.run_id in self._run_handles:
+                    handle = self._run_handles.pop(managed.run_id)
+                    handle.mark_completed()
                 logger.info(
                     "stream.subscription.unregistered thread_id=%s subscription_id=%s",
                     managed.thread_id,
                     subscription_id,
                 )
+
+    async def get_run_handle(self, run_id: str) -> RunHandle | None:
+        """Get a run handle by run_id."""
+        async with self._lock:
+            return self._run_handles.get(run_id)
+
+    async def record_run_retry(self, run_id: str) -> bool:
+        """Record a retry for a run handle. Returns True if retry is allowed."""
+        async with self._lock:
+            handle = self._run_handles.get(run_id)
+            if handle and handle.can_retry():
+                handle.record_retry()
+                logger.info(
+                    "stream.run.retry thread_id=%s run_id=%s retry_count=%s",
+                    handle.thread_id,
+                    run_id,
+                    handle.retry_count,
+                )
+                return True
+            return False
+
+    async def cancel_run_handle(self, run_id: str) -> bool:
+        """Cancel a run handle."""
+        async with self._lock:
+            handle = self._run_handles.get(run_id)
+            if handle:
+                handle.mark_cancelled()
+                logger.info(
+                    "stream.run.cancel thread_id=%s run_id=%s",
+                    handle.thread_id,
+                    run_id,
+                )
+                return True
+            return False
+
+    async def cleanup_run_subscription(self, run_id: str) -> None:
+        """Clean up subscription for a specific run."""
+        async with self._lock:
+            handle = self._run_handles.get(run_id)
+            if handle:
+                managed = self._active_subscriptions.get(handle.subscription_id)
+                if managed:
+                    try:
+                        await managed.close()
+                        logger.info(
+                            "stream.run.cleanup thread_id=%s run_id=%s subscription_id=%s",
+                            managed.thread_id,
+                            run_id,
+                            handle.subscription_id,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "stream.run.cleanup_failed run_id=%s subscription_id=%s",
+                            run_id,
+                            handle.subscription_id,
+                        )
+                    finally:
+                        self._active_subscriptions.pop(handle.subscription_id, None)
+                handle.mark_completed()
 
     async def get_active_run_for_thread(self, thread_id: str) -> dict[str, Any] | None:
         async with self._lock:
@@ -135,7 +246,9 @@ class StreamSubscriptionManager:
         managed: ManagedThreadSubscription,
         request: Request | None,
         timeout: float = 10.0,
+        run_id: str | None = None,
     ) -> AsyncIterator[ProtocolEvent | None]:
+        event_filter = RunStreamFilter(modes={"run_modes"}, run_id=run_id) if run_id else None
         try:
             while True:
                 if request is not None and await request.is_disconnected():
@@ -150,6 +263,13 @@ class StreamSubscriptionManager:
                 if managed.cursor is not None and event.seq <= managed.cursor:
                     continue
                 managed.cursor = event.seq
+                
+                if event_filter and event_filter.is_terminal(event):
+                    yield event
+                    if managed.run_id:
+                        await self.cleanup_run_subscription(managed.run_id)
+                    return
+                    
                 yield event
         finally:
             try:

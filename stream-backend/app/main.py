@@ -1179,6 +1179,19 @@ async def join_run(
     raise HTTPException(status_code=499, detail="Client disconnected")
 
 
+@app.get("/threads/{thread_id}/runs/active")
+async def get_active_run(thread_id: str) -> dict[str, Any] | None:
+    """Get active run for a thread if one exists."""
+    logger.info("runs.active.get thread_id=%s", thread_id)
+    active_run = await stream_manager.get_active_run_for_thread(thread_id)
+    if active_run is None:
+        return None
+    run = await repo.get_run(thread_id, active_run["run_id"])
+    if run is None:
+        return None
+    return run.model_dump()
+
+
 @app.get("/threads/{thread_id}/runs/{run_id}/stream")
 async def stream_existing_run(
     thread_id: str,

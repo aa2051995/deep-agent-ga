@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 from collections import defaultdict
-from typing import Any, Protocol
+from typing import Any, Protocol, TYPE_CHECKING
 
 from .deep_agent import DeepAgentDemoRunner
 from .models import (
@@ -17,6 +17,9 @@ from .models import (
 )
 from .research_runtime import ResearchDeepAgentRunner, ResearchRuntimeUnavailable
 from .store import Repository
+
+if TYPE_CHECKING:
+    from .streaming import StreamSubscriptionManager
 
 
 ACTIVE_RUN_STATUSES = {"pending", "running"}
