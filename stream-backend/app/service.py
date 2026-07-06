@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 from collections import defaultdict
-from typing import Any
+from typing import Any, Protocol
 
 from .deep_agent import DeepAgentDemoRunner
 from .models import (
@@ -21,6 +21,12 @@ from .store import Repository
 
 ACTIVE_RUN_STATUSES = {"pending", "running"}
 logger = logging.getLogger("stream_backend.service")
+
+
+class RunScheduler(Protocol):
+    def enqueue_run(self, run_record: dict[str, Any], input_value: Any = None) -> str: ...
+    def enqueue_resume(self, run_record: dict[str, Any], resume_value: Any = None) -> str: ...
+    def revoke(self, task_id: str, *, terminate: bool = False) -> None: ...
 
 
 def merge_values(current: Any, update: Any) -> Any:
@@ -62,7 +68,7 @@ class AutoResearchRunner:
 
 
 class ProtocolService:
-    def __init__(self, repo: Repository) -> None:
+    def __init__(self, repo: Repository, run_scheduler: RunScheduler | None = None) -> None:
         self.repo = repo
         mode = os.getenv("STREAM_BACKEND_AGENT_MODE", "auto").lower()
         if mode == "fixture":
@@ -71,10 +77,30 @@ class ProtocolService:
             self.runner = AutoResearchRunner(repo, strict=True)
         else:
             self.runner = AutoResearchRunner(repo)
+        self.runner_backend = (
+            os.getenv("STREAM_BACKEND_RUNNER_BACKEND")
+            or os.getenv("STREAM_BACKEND_EXECUTION_BACKEND")
+            or "asyncio"
+        ).lower()
+        self.run_scheduler = run_scheduler
+        if self.run_scheduler is None and self.runner_backend == "celery":
+            from worker.client import CeleryRunScheduler
+
+            self.run_scheduler = CeleryRunScheduler()
+        if self.runner_backend == "celery":
+            store = os.getenv("STREAM_BACKEND_STORE", "memory").lower()
+            broker = os.getenv("STREAM_BACKEND_EVENT_BROKER", "memory").lower()
+            if store != "postgres" or broker != "rabbitmq":
+                logger.warning(
+                    "service.celery_shared_backend_recommended store=%s broker=%s "
+                    "expected_store=postgres expected_broker=rabbitmq",
+                    store,
+                    broker,
+                )
         self.tasks: set[asyncio.Task[None]] = set()
         self.run_tasks: dict[tuple[str, str], asyncio.Task[None]] = {}
         self.thread_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
-        logger.info("service.init mode=%s", mode)
+        logger.info("service.init mode=%s runner_backend=%s", mode, self.runner_backend)
 
     def _track_task(self, run: RunRecord, task: asyncio.Task[None]) -> None:
         self.tasks.add(task)
@@ -82,7 +108,23 @@ class ProtocolService:
         task.add_done_callback(lambda done: self._on_task_done(run.thread_id, run.run_id, done))
         logger.info("service.task_scheduled thread_id=%s run_id=%s active_tasks=%s", run.thread_id, run.run_id, len(self.tasks))
 
-    def start_run_task(self, run: RunRecord, input_value: Any) -> bool:
+    async def start_run_task(self, run: RunRecord, input_value: Any) -> bool:
+        if self.run_scheduler is not None:
+            task_id = self.run_scheduler.enqueue_run(run.model_dump(mode="json"), input_value)
+            run.metadata = {
+                **run.metadata,
+                "worker_backend": "celery",
+                "celery_task_id": task_id,
+                "celery_action": "run",
+            }
+            await self.repo.save_run(run)
+            logger.info(
+                "service.celery_task_scheduled thread_id=%s run_id=%s task_id=%s",
+                run.thread_id,
+                run.run_id,
+                task_id,
+            )
+            return True
         task = self.run_tasks.get((run.thread_id, run.run_id))
         if task is not None and not task.done():
             logger.info(
@@ -210,7 +252,8 @@ class ProtocolService:
             await self.repo.create_run(run)
             logger.info("run.start.created thread_id=%s run_id=%s", thread_id, run.run_id)
         if schedule:
-            self.start_run_task(run, params.get("input"))
+            await self.start_run_task(run, params.get("input"))
+            logger.info("run.start.scheduled thread_id=%s run_id=%s", thread_id, run.run_id)
         return ProtocolSuccess(id=command.id, result={"run_id": run.run_id, "thread_id": thread_id})
 
     async def create_pending_run(self, thread_id: str, command: ProtocolCommand) -> ProtocolSuccess | ProtocolError:
@@ -224,6 +267,14 @@ class ProtocolService:
                 return False
             if run.status not in ACTIVE_RUN_STATUSES:
                 logger.info("run.resume.not_active thread_id=%s run_id=%s status=%s", thread_id, run_id, run.status)
+                return True
+            if self.run_scheduler is not None and run.metadata.get("celery_task_id") and resume_value is None:
+                logger.info(
+                    "run.resume.celery_already_queued thread_id=%s run_id=%s task_id=%s",
+                    thread_id,
+                    run_id,
+                    run.metadata.get("celery_task_id"),
+                )
                 return True
             task = self.run_tasks.get((thread_id, run_id))
             if task is not None and not task.done():
@@ -245,6 +296,22 @@ class ProtocolService:
             if resume_value is not None:
                 run.kwargs = {**run.kwargs, "resume": resume_value}
             await self.repo.save_run(run)
+            if self.run_scheduler is not None:
+                task_id = self.run_scheduler.enqueue_resume(run.model_dump(mode="json"), resume_value)
+                run.metadata = {
+                    **run.metadata,
+                    "worker_backend": "celery",
+                    "celery_task_id": task_id,
+                    "celery_action": "resume",
+                }
+                await self.repo.save_run(run)
+                logger.info(
+                    "run.resume.celery_scheduled thread_id=%s run_id=%s task_id=%s",
+                    thread_id,
+                    run_id,
+                    task_id,
+                )
+                return True
             runner_resume = getattr(self.runner, "resume", None)
             if runner_resume is None:
                 task = asyncio.create_task(self.runner.run(run, run.kwargs.get("input")))
@@ -298,6 +365,11 @@ class ProtocolService:
         task = self.run_tasks.pop((thread_id, run_id), None)
         if task is not None and not task.done():
             task.cancel()
+        if self.run_scheduler is not None:
+            task_id = run.metadata.get("celery_task_id")
+            if isinstance(task_id, str) and task_id:
+                terminate = os.getenv("STREAM_BACKEND_CELERY_TERMINATE_ON_CANCEL", "false").lower() in {"1", "true", "yes"}
+                self.run_scheduler.revoke(task_id, terminate=terminate)
         run.cancel_requested = True
         run.status = "interrupted"
         await self.repo.save_run(run)

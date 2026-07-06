@@ -185,19 +185,26 @@ class RabbitMQStreamSubscription:
         self._events = events
         self._broker = broker
         self._closed = False
+        self._close_lock = asyncio.Lock()
 
     async def next_event(self, timeout: float) -> ProtocolEvent:
         return await asyncio.wait_for(self._events.get(), timeout=timeout)
 
     async def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        try:
-            await self._consumer.unsubscribe(self._subscriber_id)
-        finally:
-            await self._consumer.close()
-            self._broker.discard_subscription_consumer(self._consumer)
+        async with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+            try:
+                await self._consumer.unsubscribe(self._subscriber_id)
+            except Exception:
+                logger.error("event_broker.rabbitmq.unsubscribe_failed stream_name=%s subscriber_id=%s", self.stream_name, self._subscriber_id, exc_info=True)  
+            finally:
+                try:
+                    await self._consumer.close()
+                except Exception:
+                    logger.error("event_broker.rabbitmq.consumer_close_failed stream_name=%s", self.stream_name, exc_info=True)
+                self._broker.discard_subscription_consumer(self._consumer)
 
 
 class RabbitMQStreamBroker:
@@ -408,6 +415,7 @@ class RabbitMQStreamBroker:
                 initial_credit=100,
             )
         except Exception:
+            logger.error("event_broker.rabbitmq.subscribe_failed thread_id=%s", thread_id, exc_info=True)
             await consumer.close()
             self.discard_subscription_consumer(consumer)
             raise

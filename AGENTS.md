@@ -1,3 +1,4 @@
-- always create a commit before creating new updates
+-use windows powershell compatible bash and edit commands
+ always create a commit before creating new updates
 - create a new unit test for the new updates 
 - do user tests for the new updates to verify with running real servers either for the backend or the front end.

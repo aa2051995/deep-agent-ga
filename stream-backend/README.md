@@ -67,6 +67,17 @@ $env:STREAM_BACKEND_AGENT_MODE = "research"  # real deepagents runtime only
 $env:STREAM_BACKEND_AGENT_MODE = "fixture"   # deterministic SDK protocol fixture
 ```
 
+Runs execute in the API process by default. To move agent execution into Celery
+workers while the API continues streaming broker events to the UI, set:
+
+```powershell
+$env:STREAM_BACKEND_RUNNER_BACKEND = "celery"
+$env:STREAM_BACKEND_CELERY_BROKER_URL = "amqp://guest:guest@localhost:5672//"
+```
+
+See [`worker/README.md`](worker/README.md) for the worker command and shared
+Postgres/RabbitMQ stream settings.
+
 For the real research agent:
 
 ```powershell

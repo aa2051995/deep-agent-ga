@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import uuid
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 from fastapi import Request
 
@@ -10,6 +13,8 @@ from .event_bus import EventBroker, EventSubscription
 from .models import ProtocolEvent
 from .protocol import matches_subscription
 from .store import Repository
+
+logger = logging.getLogger("stream_backend.streaming")
 
 
 @dataclass(frozen=True)
@@ -60,6 +65,8 @@ class ManagedThreadSubscription:
     thread_id: str
     subscription: EventSubscription
     cursor: int | None
+    subscription_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    run_id: str | None = None
 
     @property
     def stream_name(self) -> str:
@@ -73,14 +80,55 @@ class StreamSubscriptionManager:
     def __init__(self, repo: Repository, broker: EventBroker) -> None:
         self.repo = repo
         self.broker = broker
+        self._active_subscriptions: dict[str, ManagedThreadSubscription] = {}
+        self._lock = asyncio.Lock()
+
+    async def register_subscription(self, managed: ManagedThreadSubscription) -> None:
+        async with self._lock:
+            self._active_subscriptions[managed.subscription_id] = managed
+            logger.info(
+                "stream.subscription.registered thread_id=%s subscription_id=%s run_id=%s",
+                managed.thread_id,
+                managed.subscription_id,
+                managed.run_id,
+            )
+
+    async def unregister_subscription(self, subscription_id: str) -> None:
+        async with self._lock:
+            managed = self._active_subscriptions.pop(subscription_id, None)
+            if managed is not None:
+                logger.info(
+                    "stream.subscription.unregistered thread_id=%s subscription_id=%s",
+                    managed.thread_id,
+                    subscription_id,
+                )
+
+    async def get_active_run_for_thread(self, thread_id: str) -> dict[str, Any] | None:
+        async with self._lock:
+            for sub in self._active_subscriptions.values():
+                if sub.thread_id == thread_id and sub.run_id is not None:
+                    return {"thread_id": thread_id, "run_id": sub.run_id}
+            
+        pending_runs = await self.repo.list_runs(thread_id, limit=1, status="pending")
+        if pending_runs:
+            return {"thread_id": thread_id, "run_id": pending_runs[0].run_id}
+        
+        running_runs = await self.repo.list_runs(thread_id, limit=1, status="running")
+        if running_runs:
+            return {"thread_id": thread_id, "run_id": running_runs[0].run_id}
+        
+        return None
 
     async def subscribe_thread(
         self,
         thread_id: str,
         since: int | None = None,
+        run_id: str | None = None,
     ) -> ManagedThreadSubscription:
         subscription = await self.broker.subscribe(thread_id, since)
-        return ManagedThreadSubscription(thread_id, subscription, since)
+        managed = ManagedThreadSubscription(thread_id, subscription, since, run_id=run_id)
+        await self.register_subscription(managed)
+        return managed
 
     async def iter_events(
         self,
@@ -104,7 +152,14 @@ class StreamSubscriptionManager:
                 managed.cursor = event.seq
                 yield event
         finally:
-            await managed.close()
+            try:
+                await self.unregister_subscription(managed.subscription_id)
+            except Exception:
+                logger.exception("stream.subscription.unregister_failed subscription_id=%s", managed.subscription_id)
+            try:
+                await managed.close()
+            except Exception:
+                logger.exception("stream.subscription.close_failed subscription_id=%s", managed.subscription_id)
 
     async def wait_for_next_event(
         self,
@@ -119,4 +174,31 @@ class StreamSubscriptionManager:
                 return event.seq
             return cursor
         finally:
-            await managed.close()
+            try:
+                await self.unregister_subscription(managed.subscription_id)
+            except Exception:
+                logger.exception("stream.subscription.unregister_failed subscription_id=%s", managed.subscription_id)
+            try:
+                await managed.close()
+            except Exception:
+                logger.exception("stream.subscription.close_failed subscription_id=%s", managed.subscription_id)
+
+    async def close_all_subscriptions(self) -> None:
+        logger.info("stream.subscription.close_all start count=%s", len(self._active_subscriptions))
+        async with self._lock:
+            for managed in list(self._active_subscriptions.values()):
+                try:
+                    await managed.close()
+                    logger.info(
+                        "stream.subscription.closed thread_id=%s subscription_id=%s",
+                        managed.thread_id,
+                        managed.subscription_id,
+                    )
+                except Exception:
+                    logger.exception(
+                        "stream.subscription.close_failed thread_id=%s subscription_id=%s",
+                        managed.thread_id,
+                        managed.subscription_id,
+                    )
+            self._active_subscriptions.clear()
+        logger.info("stream.subscription.close_all complete")
