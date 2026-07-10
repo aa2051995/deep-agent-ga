@@ -325,12 +325,22 @@ class RabbitMQStreamBroker:
             arguments: dict[str, Any] = {}
             if self.stream_max_length_bytes is not None:
                 arguments["max-length-bytes"] = self.stream_max_length_bytes
+            
+            max_age_hours = int(os.getenv("STREAM_BACKEND_RABBITMQ_MAX_AGE_HOURS", "12"))
+            arguments["max-age"] = f"{max_age_hours}h"
+            
             await self._producer.create_stream(
                 stream_name,
                 arguments=arguments,
                 exists_ok=True,
             )
             self._declared.add(stream_name)
+            logger.info(
+                "event_broker.rabbitmq.stream_created stream_name=%s max_age_hours=%s max_length_bytes=%s",
+                stream_name,
+                max_age_hours,
+                self.stream_max_length_bytes,
+            )
             return stream_name
 
     def _payload_bytes(
