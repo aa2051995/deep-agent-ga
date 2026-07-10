@@ -215,6 +215,10 @@ STREAM_BACKEND_SHUTDOWN_TIMEOUT=10.0  # seconds
 
 # Load balancer headers
 SERVER_ID=stream-backend-1
+
+# RabbitMQ stream retention
+STREAM_BACKEND_RABBITMQ_MAX_AGE_HOURS=12  # Stream data retention (default: 12 hours)
+STREAM_BACKEND_RABBITMQ_STREAM_MAX_BYTES=104857600  # Max stream size in bytes (default: 100MB)
 ```
 
 ## Testing
