@@ -7,7 +7,6 @@ import os
 import sys
 import tempfile
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
@@ -107,6 +106,16 @@ def configure_logging() -> None:
 configure_logging()
 logger = logging.getLogger("stream_backend.main")
 
+app = FastAPI(title="LangGraphJS Stream Backend", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["Content-Location"],
+)
 
 def create_repository():
     mode = os.getenv("STREAM_BACKEND_STORE", "memory").lower()
@@ -129,6 +138,20 @@ def create_repository():
     logger.info("repository.create.memory")
     return InMemoryRepository()
 
+os.environ.setdefault("STREAM_BACKEND_STORE", "postgres")  # --- IGNORE ---
+os.environ.setdefault("STREAM_BACKEND_POSTGRES_URI", "postgresql://postgres:am12345Eee@localhost:5432/myapp")  # --- IGNORE ---
+os.environ.setdefault("RESEARCH_AGENT_PROVIDER", "bedrock")
+os.environ.setdefault("RESEARCH_AGENT_MODEL", "moonshotai.kimi-k2.5")
+os.environ.setdefault("AWS_REGION", "eu-north-1")
+os.environ.setdefault("AWS_BEDROCK_PROFILE", "my-profile")
+os.environ.setdefault("STREAM_BACKEND_RUNNER_BACKEND", "celery")
+os.environ.setdefault("STREAM_BACKEND_CELERY_BROKER_URL", "amqp://guest:guest@localhost:5672//")
+os.environ.setdefault("TAVILY_API_KEY", "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")
+os.environ.setdefault("GOOGLE_API_KEY", "AIzaSyBx0JdmhyXdoufg23j2Ec69ej968-LSymU")  # --- IGNORE ---
+os.environ.setdefault("STREAM_BACKEND_EVENT_BROKER", "rabbitmq")
+os.environ.setdefault("RABBITMQ_STREAM_URL", "rabbitmq-stream://guest:guest@localhost:5552/")
+os.environ.setdefault("STREAM_BACKEND_CELERY_QUEUE", "deep-research-runs")
+os.environ.setdefault("STREAM_BACKEND_CELERY_TERMINATE_ON_CANCEL", "true")
 
 base_repo = create_repository()
 event_broker = create_event_broker()
@@ -137,83 +160,22 @@ service = ProtocolService(repo)
 stream_manager = StreamSubscriptionManager(repo, event_broker)
 
 
-async def recover_interrupted_runs() -> None:
-    logger.info("app.startup.recover_interrupted_runs")
-    try:
-        interrupted = 0
-        threads = await repo.list_threads(limit=1000)
-        for thread in threads:
-            for status in ["pending", "running"]:
-                runs = await repo.list_runs(thread.thread_id, limit=100, status=status)
-                for run in runs:
-                    logger.info(
-                        "app.startup.interrupted_run thread_id=%s run_id=%s status=%s",
-                        thread.thread_id,
-                        run.run_id,
-                        run.status,
-                    )
-                    run.status = "interrupted"
-                    run.metadata = {**run.metadata, "recovered": True, "recovery_reason": "server_restart"}
-                    await repo.save_run(run)
-                    await repo.append_event(
-                        thread.thread_id,
-                        "lifecycle",
-                        {"event": "interrupted", "run_id": run.run_id, "reason": "server_restart"},
-                    )
-                    interrupted += 1
-        logger.info("app.startup.recovery_complete interrupted=%s", interrupted)
-    except Exception:
-        logger.exception("app.startup.recovery_failed")
-
-
+@app.on_event("startup")
 async def startup() -> None:
     logger.info("app.startup.begin")
     setup = getattr(repo, "setup", None)
     if setup is not None:
         await setup()
-    await recover_interrupted_runs()
     logger.info("app.startup.complete")
 
 
+@app.on_event("shutdown")
 async def shutdown() -> None:
     logger.info("app.shutdown.begin")
-    await stream_manager.close_all_subscriptions()
     close = getattr(repo, "close", None)
     if close is not None:
         await close()
     logger.info("app.shutdown.complete")
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    await startup()
-    try:
-        yield
-    finally:
-        await shutdown()
-
-
-app = FastAPI(title="LangGraphJS Stream Backend", version="0.1.0", lifespan=lifespan)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["Content-Location", "X-Session-Id", "X-Request-Id"],
-)
-
-
-@app.middleware("http")
-async def add_load_balancer_headers(request: Request, call_next):
-    response = await call_next(request)
-    session_id = request.headers.get("X-Session-Id") or str(uuid4())
-    request_id = request.headers.get("X-Request-Id") or str(uuid4())
-    response.headers.setdefault("X-Session-Id", session_id)
-    response.headers.setdefault("X-Request-Id", request_id)
-    response.headers.setdefault("X-Server-Id", os.getenv("SERVER_ID", "stream-backend-1"))
-    return response
 
 
 # @app.middleware("http")
@@ -614,29 +576,26 @@ async def stream_thread_events(
     event_filter = RunStreamFilter(modes=modes or {"run_modes"}, run_id=run_id)
     stream_state: dict[str, dict[str, dict[str, str]]] = {}
     managed = await stream_manager.subscribe_thread(thread_id, since)
-    try:
-        async for event in stream_manager.iter_events(managed, request):
-            if event is None:
-                # logger.debug("thread.stream.heartbeat thread_id=%s run_id=%s", thread_id, run_id)
-                yield ": heartbeat\n\n"
-                continue
-            if event_filter.matches(event):
-                # logger.debug(
-                #     "thread.stream.event thread_id=%s run_id=%s seq=%s method=%s namespace=%s",
-                #     thread_id,
-                #     run_id,
-                #     event.seq,
-                #     event.method,
-                #     event.params.namespace,
-                # )
-                frame = legacy_sse_frame(thread_id, event, stream_state)
-                if frame is not None:
-                    yield frame
-            if stop_on_terminal and event_filter.is_terminal(event):
-                logger.info("thread.stream.terminal thread_id=%s run_id=%s seq=%s", thread_id, run_id, event.seq)
-                return
-    finally:
-        await stream_manager.close_all_subscriptions()
+    async for event in stream_manager.iter_events(managed, request):
+        if event is None:
+            # logger.debug("thread.stream.heartbeat thread_id=%s run_id=%s", thread_id, run_id)
+            yield ": heartbeat\n\n"
+            continue
+        if event_filter.matches(event):
+            # logger.debug(
+            #     "thread.stream.event thread_id=%s run_id=%s seq=%s method=%s namespace=%s",
+            #     thread_id,
+            #     run_id,
+            #     event.seq,
+            #     event.method,
+            #     event.params.namespace,
+            # )
+            frame = legacy_sse_frame(thread_id, event, stream_state)
+            if frame is not None:
+                yield frame
+        if stop_on_terminal and event_filter.is_terminal(event):
+            logger.info("thread.stream.terminal thread_id=%s run_id=%s seq=%s", thread_id, run_id, event.seq)
+            return
 
 
 @app.get("/health")
@@ -995,30 +954,27 @@ async def stream_stateful_run(thread_id: str, payload: dict, request: Request) -
         event_filter = RunStreamFilter(modes={"run_modes"}, run_id=run_id)
         stream_state: dict[str, dict[str, dict[str, str]]] = {}
         managed = await stream_manager.subscribe_thread(thread_id, since)
-        try:
-            run = await repo.get_run(thread_id, run_id)
-            if run is None:
-                await managed.close()
-                raise HTTPException(status_code=404, detail="Run not found")
-            service.start_run_task(run, run.kwargs.get("input"))
-            async for event in stream_manager.iter_events(managed, request):
-                if event is None:
-                    yield ": heartbeat\n\n"
-                    continue
-                if event_filter.matches(event):
-                    frame = legacy_sse_frame(thread_id, event, stream_state)
-                    if frame is not None:
-                        yield frame
-                if event_filter.is_terminal(event):
-                    logger.info(
-                        "runs.stream_stateful.terminal thread_id=%s run_id=%s seq=%s",
-                        thread_id,
-                        run_id,
-                        event.seq,
-                    )
-                    return
-        finally:
-            await stream_manager.close_all_subscriptions()
+        run = await repo.get_run(thread_id, run_id)
+        if run is None:
+            await managed.close()
+            raise HTTPException(status_code=404, detail="Run not found")
+        await service.start_run_task(run, run.kwargs.get("input"))
+        async for event in stream_manager.iter_events(managed, request):
+            if event is None:
+                yield ": heartbeat\n\n"
+                continue
+            if event_filter.matches(event):
+                frame = legacy_sse_frame(thread_id, event, stream_state)
+                if frame is not None:
+                    yield frame
+            if event_filter.is_terminal(event):
+                logger.info(
+                    "runs.stream_stateful.terminal thread_id=%s run_id=%s seq=%s",
+                    thread_id,
+                    run_id,
+                    event.seq,
+                )
+                return
 
     headers = {
         "Cache-Control": "no-cache",
@@ -1092,7 +1048,6 @@ async def wait_for_run_output(thread_id: str, run_id: str, request: Request) -> 
             ):
                 thread = await repo.get_thread(thread_id)
                 logger.info("runs.wait_output.terminal thread_id=%s run_id=%s event=%s", thread_id, run_id, data.get("event"))
-                await stream_manager.close_all_subscriptions()
                 return thread.state.values if thread else {}
         try:
             cursor = await stream_manager.wait_for_next_event(
@@ -1103,7 +1058,6 @@ async def wait_for_run_output(thread_id: str, run_id: str, request: Request) -> 
         except asyncio.TimeoutError:
             logger.debug("runs.wait_output.timeout thread_id=%s run_id=%s cursor=%s", thread_id, run_id, cursor)
             continue
-    await stream_manager.close_all_subscriptions()
     raise HTTPException(status_code=499, detail="Client disconnected")
 
 
@@ -1162,7 +1116,6 @@ async def join_run(
         if run.status in {"success", "error", "interrupted", "timeout"}:
             thread = await repo.get_thread(thread_id)
             logger.info("runs.join.terminal thread_id=%s run_id=%s status=%s", thread_id, run_id, run.status)
-            await stream_manager.close_all_subscriptions()
             return thread.state.values if thread else {}
         try:
             cursor = await stream_manager.wait_for_next_event(
@@ -1173,23 +1126,9 @@ async def join_run(
         except asyncio.TimeoutError:
             logger.debug("runs.join.timeout thread_id=%s run_id=%s cursor=%s", thread_id, run_id, cursor)
             continue
-    await stream_manager.close_all_subscriptions()
     if cancel_on_disconnect:
         await service.cancel_run(thread_id, run_id)
     raise HTTPException(status_code=499, detail="Client disconnected")
-
-
-@app.get("/threads/{thread_id}/runs/active")
-async def get_active_run(thread_id: str) -> dict[str, Any] | None:
-    """Get active run for a thread if one exists."""
-    logger.info("runs.active.get thread_id=%s", thread_id)
-    active_run = await stream_manager.get_active_run_for_thread(thread_id)
-    if active_run is None:
-        return None
-    run = await repo.get_run(thread_id, active_run["run_id"])
-    if run is None:
-        return None
-    return run.model_dump()
 
 
 @app.get("/threads/{thread_id}/runs/{run_id}/stream")
