@@ -4,15 +4,19 @@ import asyncio
 import logging
 import os
 import signal
+import sys
 from typing import Any
 from weakref import WeakSet
 
 from app.deep_agent import DeepAgentDemoRunner
 from app.models import RunRecord
 from app.research_runtime import ResearchDeepAgentRunner, ResearchRuntimeUnavailable
-from app.runtime import create_publishing_repository
+from app.main import  create_repository
 
 from .celery_app import celery_app
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 logger = logging.getLogger("stream_backend.worker.tasks")
 
@@ -152,7 +156,7 @@ async def execute_run_direct(
         logger.warning("celery.run.shutdown_active thread_id=%s run_id=%s", thread_id, run_id)
         run.status = "interrupted"
         run.metadata = {**run.metadata, "shutdown": True}
-        repo_temp = create_publishing_repository()
+        repo_temp = create_repository()
         await repo_temp.setup()
         try:
             await update_run_status(repo_temp, thread_id, run_id, "interrupted")
@@ -160,7 +164,7 @@ async def execute_run_direct(
             await repo_temp.close()
         return
     
-    repo = create_publishing_repository()
+    repo = create_repository()
     await repo.setup()
     
     task: asyncio.Task[None] | None = None
@@ -261,7 +265,7 @@ def resume_agent(self: Any, run_record: dict[str, Any], resume_value: Any = None
 
 
 async def recover_stale_runs() -> list[dict[str, Any]]:
-    repo = create_publishing_repository()
+    repo = create_repository()
     await repo.setup()
     recovered = []
     try:

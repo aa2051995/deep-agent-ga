@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 
 from celery import Celery, app
 from celery.signals import worker_process_init
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 def celery_broker_url() -> str:
@@ -23,7 +27,7 @@ celery_app = Celery(
     "deep_research_worker",
     broker=celery_broker_url(),
     backend=celery_result_backend(),
-    include=["worker.tasks"],
+    includes=["worker.tasks"],
 )
 celery_app.conf.update(
     task_default_queue=os.getenv("STREAM_BACKEND_CELERY_QUEUE", "deep-research-runs"),
@@ -52,6 +56,9 @@ celery_app.conf.update(
 @worker_process_init.connect
 async def on_worker_init(**kwargs) -> None:
     """Called when each worker process starts; recover stale runs from previous crashes."""
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    
     from .tasks import recover_stale_runs
     
     logger = kwargs.get("logger")

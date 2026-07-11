@@ -13,6 +13,9 @@ from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -118,6 +121,20 @@ app.add_middleware(
 )
 
 def create_repository():
+    os.environ.setdefault("STREAM_BACKEND_STORE", "postgres")  # --- IGNORE ---
+    os.environ.setdefault("STREAM_BACKEND_POSTGRES_URI", "postgresql://postgres:am12345Eee@localhost:5432/myapp")  # --- IGNORE ---
+    os.environ.setdefault("RESEARCH_AGENT_PROVIDER", "bedrock")
+    os.environ.setdefault("RESEARCH_AGENT_MODEL", "moonshotai.kimi-k2.5")
+    os.environ.setdefault("AWS_REGION", "eu-north-1")
+    os.environ.setdefault("AWS_BEDROCK_PROFILE", "my-profile")
+    os.environ.setdefault("STREAM_BACKEND_RUNNER_BACKEND", "celery")
+    os.environ.setdefault("STREAM_BACKEND_CELERY_BROKER_URL", "amqp://guest:guest@localhost:5672//")
+    os.environ.setdefault("TAVILY_API_KEY", "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")
+    os.environ.setdefault("GOOGLE_API_KEY", "AIzaSyBx0JdmhyXdoufg23j2Ec69ej968-LSymU")  # --- IGNORE ---
+    os.environ.setdefault("STREAM_BACKEND_EVENT_BROKER", "rabbitmq")
+    os.environ.setdefault("RABBITMQ_STREAM_URL", "rabbitmq-stream://guest:guest@localhost:5552/")
+    os.environ.setdefault("STREAM_BACKEND_CELERY_QUEUE", "deep-research-runs")
+    os.environ.setdefault("STREAM_BACKEND_CELERY_TERMINATE_ON_CANCEL", "true")
     mode = os.getenv("STREAM_BACKEND_STORE", "memory").lower()
     logger.info("repository.create.start mode=%s", mode)
     if mode == "postgres":
@@ -138,20 +155,7 @@ def create_repository():
     logger.info("repository.create.memory")
     return InMemoryRepository()
 
-os.environ.setdefault("STREAM_BACKEND_STORE", "postgres")  # --- IGNORE ---
-os.environ.setdefault("STREAM_BACKEND_POSTGRES_URI", "postgresql://postgres:am12345Eee@localhost:5432/myapp")  # --- IGNORE ---
-os.environ.setdefault("RESEARCH_AGENT_PROVIDER", "bedrock")
-os.environ.setdefault("RESEARCH_AGENT_MODEL", "moonshotai.kimi-k2.5")
-os.environ.setdefault("AWS_REGION", "eu-north-1")
-os.environ.setdefault("AWS_BEDROCK_PROFILE", "my-profile")
-os.environ.setdefault("STREAM_BACKEND_RUNNER_BACKEND", "celery")
-os.environ.setdefault("STREAM_BACKEND_CELERY_BROKER_URL", "amqp://guest:guest@localhost:5672//")
-os.environ.setdefault("TAVILY_API_KEY", "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")
-os.environ.setdefault("GOOGLE_API_KEY", "AIzaSyBx0JdmhyXdoufg23j2Ec69ej968-LSymU")  # --- IGNORE ---
-os.environ.setdefault("STREAM_BACKEND_EVENT_BROKER", "rabbitmq")
-os.environ.setdefault("RABBITMQ_STREAM_URL", "rabbitmq-stream://guest:guest@localhost:5552/")
-os.environ.setdefault("STREAM_BACKEND_CELERY_QUEUE", "deep-research-runs")
-os.environ.setdefault("STREAM_BACKEND_CELERY_TERMINATE_ON_CANCEL", "true")
+
 
 base_repo = create_repository()
 event_broker = create_event_broker()
