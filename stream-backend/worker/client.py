@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+from typing import Any, Literal
 
 logger = logging.getLogger("stream_backend.worker.client")
+
+
+TaskStatus = Literal["PENDING", "STARTED", "SUCCESS", "FAILURE", "RETRY", "REVOKED"]
 
 
 class CeleryRunScheduler:
@@ -13,13 +16,30 @@ class CeleryRunScheduler:
     def __init__(self) -> None:
         try:
             from .celery_app import celery_app
-        except Exception as exc:  # pragma: no cover - depends on optional dependency
+        except Exception as exc:
             raise RuntimeError(
                 "Install celery and configure STREAM_BACKEND_CELERY_BROKER_URL "
                 "to use STREAM_BACKEND_RUNNER_BACKEND=celery."
             ) from exc
         self.app = celery_app
         self.queue = os.getenv("STREAM_BACKEND_CELERY_QUEUE", "deep-research-runs")
+
+    def get_task_status(self, task_id: str) -> TaskStatus | None:
+        """Get the status of a Celery task."""
+        try:
+            result = self.app.AsyncResult(task_id)
+            status = result.status
+            return status if isinstance(status, str) else None
+        except Exception:
+            logger.exception("celery.task_status.failed task_id=%s", task_id)
+            return None
+
+    def is_task_active(self, task_id: str) -> bool:
+        """Check if a task is still running or pending."""
+        status = self.get_task_status(task_id)
+        active = status in {"PENDING", "STARTED", "RETRY"}
+        logger.debug("celery.task.active task_id=%s status=%s active=%s", task_id, status, active)
+        return active
 
     def enqueue_run(self, run_record: dict[str, Any], input_value: Any = None) -> str:
         result = self.app.send_task(

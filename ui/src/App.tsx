@@ -1278,32 +1278,8 @@ export function App() {
     if (!activeRun) {
       return undefined;
     }
-    let cancelled = false;
-    const verify = async (): Promise<void> => {
-      try {
-        const status = await fetchRunStatus(apiUrl, activeRun);
-        if (cancelled) {
-          return;
-        }
-        if (!status || !ACTIVE_RUN_STATUSES.has(status)) {
-          logger.info("activeRun.status.cleared", { ...activeRun, status });
-          setActiveRun((current) =>
-            current?.threadId === activeRun.threadId && current.runId === activeRun.runId ? null : current,
-          );
-        }
-      } catch (caught) {
-        logger.warn("activeRun.status.failed", {
-          ...activeRun,
-          message: caught instanceof Error ? caught.message : String(caught),
-        });
-      }
-    };
-    void verify();
-    const interval = window.setInterval(() => void verify(), 3000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
+    
+    return undefined;
   }, [activeRun, apiUrl]);
 
   useEffect(() => {
@@ -1369,11 +1345,14 @@ export function App() {
     if (!active || joinedRunIds.current.has(active.runId) || active.runId === currentRunId) {
       return;
     }
-    logger.info("activeRun.autoJoin", { threadId, runId: active.runId, status: active.status });
-    void continueActiveRun({ threadId, runId: active.runId });
-    // continueActiveRun intentionally owns the resume/join side effects.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentRunId, runs, stream.isLoading, threadId]);
+    
+    if (activeRun && activeRun.runId === active.runId && activeRun.threadId === threadId) {
+      return;
+    }
+    
+    logger.info("activeRun.discovered", { threadId, runId: active.runId, status: active.status });
+    setActiveRun({ threadId, runId: active.runId });
+  }, [activeRun, currentRunId, runs, stream.isLoading, threadId]);
 
   useEffect(() => {
     if (!threadId) {

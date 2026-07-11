@@ -271,14 +271,58 @@ class ProtocolService:
             if run.status not in ACTIVE_RUN_STATUSES:
                 logger.info("run.resume.not_active thread_id=%s run_id=%s status=%s", thread_id, run_id, run.status)
                 return True
-            if self.run_scheduler is not None and run.metadata.get("celery_task_id") and resume_value is None:
-                logger.info(
-                    "run.resume.celery_already_queued thread_id=%s run_id=%s task_id=%s",
+            
+            celery_task_id = run.metadata.get("celery_task_id")
+            if self.run_scheduler is not None and celery_task_id and resume_value is None:
+                if self.run_scheduler.is_task_active(celery_task_id):
+                    logger.info(
+                        "run.resume.celery_task_active thread_id=%s run_id=%s task_id=%s",
+                        thread_id,
+                        run_id,
+                        celery_task_id,
+                    )
+                    return True
+                
+                reschedule_count = int(run.metadata.get("reschedule_count", 0))
+                max_reschedules = int(os.getenv("STREAM_BACKEND_MAX_RESCHEDULES", "2"))
+                
+                if reschedule_count >= max_reschedules:
+                    logger.warning(
+                        "run.resume.reschedule_limit_reached thread_id=%s run_id=%s count=%s max=%s",
+                        thread_id,
+                        run_id,
+                        reschedule_count,
+                        max_reschedules,
+                    )
+                    run.status = "error"
+                    run.metadata = {
+                        **run.metadata,
+                        "error": "reschedule_limit_exceeded",
+                        "error_message": f"Run rescheduled {reschedule_count} times without completion",
+                    }
+                    await self.repo.save_run(run)
+                    await self.repo.append_event(
+                        thread_id,
+                        "lifecycle",
+                        {"event": "failed", "run_id": run_id, "reason": "reschedule_limit_exceeded"},
+                    )
+                    return False
+                
+                logger.warning(
+                    "run.resume.task_dead_rescheduling thread_id=%s run_id=%s task_id=%s reschedule=%s",
                     thread_id,
                     run_id,
-                    run.metadata.get("celery_task_id"),
+                    celery_task_id,
+                    reschedule_count + 1,
                 )
-                return True
+                run.metadata = {
+                    **run.metadata,
+                    "reschedule_count": reschedule_count + 1,
+                    "rescheduled_at": os.getenv("now_iso", ""),
+                    "previous_task_id": celery_task_id,
+                }
+                await self.repo.save_run(run)
+                
             task = self.run_tasks.get((thread_id, run_id))
             if task is not None and not task.done():
                 logger.info("run.resume.already_attached thread_id=%s run_id=%s", thread_id, run_id)
