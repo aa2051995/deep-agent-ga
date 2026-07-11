@@ -5,8 +5,14 @@ import logging
 import os
 import signal
 import sys
+from pathlib import Path
 from typing import Any
 from weakref import WeakSet
+
+# Ensure stream-backend directory is in sys.path for research_agent imports
+_stream_backend_dir = str(Path(__file__).parent.parent.resolve())
+if _stream_backend_dir not in sys.path:
+    sys.path.insert(0, _stream_backend_dir)
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -156,7 +162,7 @@ async def execute_run_direct(
         logger.warning("celery.run.shutdown_active thread_id=%s run_id=%s", thread_id, run_id)
         run.status = "interrupted"
         run.metadata = {**run.metadata, "shutdown": True}
-        repo_temp = create_repository()
+        repo_temp = create_publishing_repository()
         await repo_temp.setup()
         try:
             await update_run_status(repo_temp, thread_id, run_id, "interrupted")
@@ -164,7 +170,7 @@ async def execute_run_direct(
             await repo_temp.close()
         return
     
-    repo = create_repository()
+    repo = create_publishing_repository()
     await repo.setup()
     
     task: asyncio.Task[None] | None = None
@@ -265,7 +271,7 @@ def resume_agent(self: Any, run_record: dict[str, Any], resume_value: Any = None
 
 
 async def recover_stale_runs() -> list[dict[str, Any]]:
-    repo = create_repository()
+    repo = create_publishing_repository()
     await repo.setup()
     recovered = []
     try:
@@ -294,20 +300,20 @@ async def recover_stale_runs() -> list[dict[str, Any]]:
     return recovered
 
 
-def main() -> None:
-    """Worker entry point that recovers stale runs before starting."""
-    import os
+# def main() -> None:
+#     """Worker entry point that recovers stale runs before starting."""
+#     import os
     
-    logger.info("worker.start.recover_stale_runs")
-    recovered = asyncio.run(recover_stale_runs())
-    logger.info("worker.start.recovery_complete count=%s", len(recovered))
+#     logger.info("worker.start.recover_stale_runs")
+#     recovered = asyncio.run(recover_stale_runs())
+#     logger.info("worker.start.recovery_complete count=%s", len(recovered))
     
-    from .celery_app import celery_app
+#     from .celery_app import celery_app
     
-    celery_app.worker_main(
-        [
-            "worker",
-            "--loglevel=info",
-            f"--queues={os.getenv('STREAM_BACKEND_CELERY_QUEUE', 'deep-research-runs')}",
-        ]
-    )
+#     celery_app.worker_main(
+#         [
+#             "worker",
+#             "--loglevel=info",
+#             f"--queues={os.getenv('STREAM_BACKEND_CELERY_QUEUE', 'deep-research-runs')}",
+#         ]
+#     )
