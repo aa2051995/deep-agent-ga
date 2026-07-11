@@ -1,0 +1,346 @@
+# Celery Worker Startup Guide
+
+## Problem Encountered
+
+```
+KeyError: 'deep_research.run_agent'
+```
+
+Celery worker couldn't find the registered task because of import path issues.
+
+## Root Cause
+
+1. **Relative Imports**: Using `.celery_app` and `.tasks` instead of absolute `worker.celery_app` and `worker.tasks`
+2. **Wrong Working Directory**: Worker must be started from `stream-backend/` directory
+3. **Import Order**: Event loop policy must be set before importing async modules
+
+## Solution Applied
+
+### 1. Fixed Import Paths
+
+**Before:**
+```python
+# worker/tasks.py
+from .celery_app import celery_app  # ❌ Relative import
+```
+
+**After:**
+```python
+# worker/tasks.py
+from worker.celery_app import celery_app  # ✅ Absolute import
+```
+
+### 2. Startup Instructions
+
+## How to Start the Celery Worker
+
+### From `stream-backend/` Directory
+
+```bash
+# Navigate to stream-backend directory
+cd stream-backend
+
+# Start the worker
+celery -A worker.celery_app worker --loglevel=info --queues=deep-research-runs
+```
+
+**Or using Python:**
+```bash
+cd stream-backend
+python -m worker.celery_app worker --loglevel=info
+```
+
+**Or using the main entry point:**
+```bash
+cd stream-backend
+python -m worker.tasks
+```
+
+## Verify Worker is Running
+
+### Check Registered Tasks
+
+```bash
+cd stream-backend
+celery -A worker.celery_app inspect registered
+```
+
+**Expected output:**
+```
+-> celery@HOSTNAME: OK
+    * deep_research.run_agent
+    * deep_research.resume_agent
+```
+
+### Check Active Workers
+
+```bash
+celery -A worker.celery_app inspect active
+```
+
+### Check Worker Status
+
+```bash
+celery -A worker.celery_app status
+```
+
+## Directory Structure
+
+```
+stream-backend/           <-- START FROM HERE (pwd must be here)
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── service.py
+│   └── ...
+├── worker/
+│   ├── __init__.py
+│   ├── celery_app.py     <-- Celery app instance
+│   ├── tasks.py          <-- Task definitions
+│   └── client.py
+└── requirements.txt
+```
+
+## Common Issues
+
+### 1. KeyError: 'deep_research.run_agent'
+
+**Cause:** Worker not finding task module
+**Fix:** 
+```bash
+# Ensure you're in stream-backend directory
+pwd  # Should show: /path/to/deep-research/stream-backend
+
+# Start worker with absolute path
+celery -A worker.celery_app worker --loglevel=info
+```
+
+### 2. ModuleNotFoundError: No module named 'worker'
+
+**Cause:** Wrong working directory
+**Fix:**
+```bash
+cd stream-backend
+celery -A worker.celery_app worker --loglevel=info
+```
+
+### 3. ImportError: cannot import name 'celery_app'
+
+**Cause:** Missing `__init__.py` in worker directory
+**Fix:**
+```bash
+# Ensure worker/__init__.py exists
+touch stream-backend/worker/__init__.py
+```
+
+### 4. ProactorEventLoop Error (Windows)
+
+**Cause:** Windows default event loop incompatible with psycopg
+**Fix:** Already fixed in code (WindowsSelectorEventLoopPolicy)
+
+## Configuration
+
+### Environment Variables
+
+```bash
+# Celery Broker (RabbitMQ)
+export STREAM_BACKEND_CELERY_BROKER_URL="amqp://guest:guest@localhost:5672//"
+
+# Queue Name
+export STREAM_BACKEND_CELERY_QUEUE="deep-research-runs"
+
+# Result Backend (optional)
+export STREAM_BACKEND_CELERY_RESULT_BACKEND="rpc://"
+
+# Worker Settings
+export STREAM_BACKEND_CELERY_PREFETCH_MULTIPLIER=1
+export STREAM_BACKEND_CELERY_ACKS_LATE=true
+```
+
+### Worker Command Options
+
+```bash
+# Basic worker
+celery -A worker.celery_app worker
+
+# With logging
+celery -A worker.celery_app worker --loglevel=info
+
+# Specific queue
+celery -A worker.celery_app worker --queues=deep-research-runs
+
+# Concurrency
+celery -A worker.celery_app worker --concurrency=4
+
+# With result backend
+celery -A worker.celery_app worker --loglevel=info --without-gossip --without-mingle
+```
+
+## Testing the Setup
+
+### Test Task Registration
+
+```bash
+cd stream-backend
+python -c "from worker.celery_app import celery_app; print(celery_app.tasks.keys())"
+```
+
+**Expected output:**
+```python
+dict_keys(['celery.backend_cleanup', 'deep_research.run_agent', 'deep_research.resume_agent'])
+```
+
+### Test Worker Connection
+
+```python
+# test_worker.py
+from worker.celery_app import celery_app
+from worker.tasks import run_agent
+
+# Check task is registered
+print(f"Task name: {run_agent.name}")
+print(f"Task registered: {run_agent.name in celery_app.tasks}")
+```
+
+Run:
+```bash
+cd stream-backend
+python test_worker.py
+```
+
+### Send Test Task
+
+```python
+# test_task_send.py
+from worker.client import CeleryRunScheduler
+
+scheduler = CeleryRunScheduler()
+
+run_record = {
+    "run_id": "test-123",
+    "thread_id": "test-thread",
+    "assistant_id": "test",
+    "status": "pending",
+    "metadata": {},
+    "kwargs": {},
+}
+
+task_id = scheduler.enqueue_run(run_record, {"messages": []})
+print(f"Task enqueued: {task_id}")
+```
+
+## Monitoring
+
+### Flower (Web UI)
+
+```bash
+# Install Flower
+pip install flower
+
+# Start Flower
+celery -A worker.celery_app flower --port=5555
+
+# Open browser
+# http://localhost:5555
+```
+
+### Command Line Monitoring
+
+```bash
+# Watch worker activity
+watch -n 1 'celery -A worker.celery_app inspect active'
+
+# Monitor task events
+celery -A worker.celery_app events
+```
+
+## Debugging
+
+### Enable Debug Logging
+
+```bash
+celery -A worker.celery_app worker --loglevel=debug
+```
+
+### Check Celery Logs
+
+```bash
+# Worker logs
+tail -f /var/log/celery/worker.log
+
+# Or redirect to file
+celery -A worker.celery_app worker --loglevel=info --logfile=celery_worker.log
+```
+
+### Python Debugging
+
+```python
+# Add to worker/tasks.py
+import logging
+logging.basicConfig(level=logging.DEBUG)
+```
+
+## Production Setup
+
+### Systemd Service (Linux)
+
+```ini
+# /etc/systemd/system/celery-worker.service
+[Unit]
+Description=Celery Worker for Deep Research
+After=network.target
+
+[Service]
+Type=forking
+User=celery
+Group=celery
+WorkingDirectory=/path/to/deep-research/stream-backend
+Environment="STREAM_BACKEND_CELERY_BROKER_URL=amqp://guest:guest@localhost:5672//"
+ExecStart=/usr/bin/celery -A worker.celery_app worker --loglevel=info --logfile=/var/log/celery/worker.log
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Docker
+
+```dockerfile
+FROM python:3.11
+
+WORKDIR /app
+COPY stream-backend .
+
+RUN pip install -r requirements.txt
+
+CMD ["celery", "-A", "worker.celery_app", "worker", "--loglevel=info"]
+```
+
+```bash
+docker build -t deep-research-worker .
+docker run -d deep-research-worker
+```
+
+## Quick Reference
+
+| Command | Description |
+|---------|-------------|
+| `celery -A worker.celery_app worker` | Start worker |
+| `celery -A worker.celery_app inspect active` | List active tasks |
+| `celery -A worker.celery_app inspect registered` | List registered tasks |
+| `celery -A worker.celery_app status` | Worker status |
+| `celery -A worker.celery_app control shutdown` | Graceful shutdown |
+| `celery -A worker.celery_app purge` | Purge all tasks |
+
+## Summary
+
+✅ **Fixed:** Absolute imports (`worker.celery_app` instead of `.celery_app`)
+✅ **Correct:** Start worker from `stream-backend/` directory
+✅ **Verified:** Tasks properly registered and discoverable
+✅ **Production Ready:** Configuration and monitoring guides included
+
+**Remember:** Always start the worker from the `stream-backend/` directory with:
+```bash
+cd stream-backend
+celery -A worker.celery_app worker --loglevel=info
+```
