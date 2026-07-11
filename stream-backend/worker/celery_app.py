@@ -59,7 +59,7 @@ async def on_worker_init(**kwargs) -> None:
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     
-    from .tasks import recover_stale_runs
+    from worker.tasks import recover_stale_runs
     
     logger = kwargs.get("logger")
     if logger:

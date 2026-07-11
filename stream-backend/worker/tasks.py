@@ -8,15 +8,15 @@ import sys
 from typing import Any
 from weakref import WeakSet
 
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from app.deep_agent import DeepAgentDemoRunner
 from app.models import RunRecord
 from app.research_runtime import ResearchDeepAgentRunner, ResearchRuntimeUnavailable
-from app.main import  create_repository
+from app.runtime import create_publishing_repository
 
-from .celery_app import celery_app
-
-if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+from worker.celery_app import celery_app
 
 logger = logging.getLogger("stream_backend.worker.tasks")
 
