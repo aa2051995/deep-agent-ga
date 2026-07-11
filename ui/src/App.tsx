@@ -1342,11 +1342,17 @@ export function App() {
       return;
     }
     const active = runs.find((run) => ACTIVE_RUN_STATUSES.has(run.status));
-    if (!active || joinedRunIds.current.has(active.runId) || active.runId === currentRunId) {
+    if (!active) {
       return;
     }
     
-    if (activeRun && activeRun.runId === active.runId && activeRun.threadId === threadId) {
+    if (joinedRunIds.current.has(active.runId) || active.runId === currentRunIdRef.current) {
+      logger.debug("activeRunMonitor.skipped.alreadyJoined", { threadId, runId: active.runId });
+      return;
+    }
+    
+    if (activeRunRef.current?.threadId === threadId && activeRunRef.current.runId === active.runId) {
+      logger.debug("activeRunMonitor.skipped.alreadyShowing", { threadId, runId: active.runId });
       return;
     }
     
