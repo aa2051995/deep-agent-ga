@@ -4,6 +4,7 @@ import asyncio
 import importlib
 import logging
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,25 @@ logger = logging.getLogger("stream_backend.research_runtime")
 
 class ResearchRuntimeUnavailable(RuntimeError):
     pass
+
+
+def ensure_research_agent_import_paths() -> list[str]:
+    added: list[str] = []
+    candidates = [
+        Path(__file__).resolve().parents[1],
+        Path(__file__).resolve().parents[2],
+    ]
+    for path in reversed(candidates):
+        if not (path / "research_agent").exists():
+            continue
+        text = str(path)
+        if text not in sys.path:
+            sys.path.insert(0, text)
+            added.append(text)
+    return added
+
+
+ensure_research_agent_import_paths()
 
 
 def optional_float_env(name: str) -> float | None:

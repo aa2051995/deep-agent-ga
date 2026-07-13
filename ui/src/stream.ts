@@ -170,7 +170,7 @@ export function useDeepResearchStream(
     threadId,
     onThreadId,
     messagesKey: "messages",
-    reconnectOnMount: true,
+    reconnectOnMount: false,
     fetchStateHistory: { limit: 20 },
     subagentToolNames: ["task"],
     filterSubagentMessages: true,

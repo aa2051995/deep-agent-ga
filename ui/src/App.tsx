@@ -184,11 +184,24 @@ function messageEntriesFromCheckpointSnapshots(
   runs: RunSummary[],
   snapshots: Record<string, RunCheckpointSnapshot>,
 ): DisplayedMessageEntry[] {
+  // Each LangGraph checkpoint includes the full thread history, so later runs
+  // contain the same messages as earlier ones.  Deduplicate by message id so
+  // every unique message appears exactly once, attributed to the earliest run
+  // that produced it.  This prevents the same user message from showing up
+  // multiple times (once per run) with different subagent cards attached.
+  const seenIds = new Set<string>();
   return runs.flatMap((run) =>
-    ((snapshots[run.runId]?.messages ?? []) as Message[]).map((message) => ({
-      message,
-      runId: run.runId,
-    })),
+    ((snapshots[run.runId]?.messages ?? []) as Message[])
+      .filter((message) => {
+        if (!message.id) return true;
+        if (seenIds.has(message.id)) return false;
+        seenIds.add(message.id);
+        return true;
+      })
+      .map((message) => ({
+        message,
+        runId: run.runId,
+      })),
   );
 }
 
@@ -525,6 +538,24 @@ async function fetchRunStatus(apiUrl: string, run: ActiveRun): Promise<string | 
   return typeof data.status === "string" ? data.status : null;
 }
 
+async function fetchRunActive(
+  apiUrl: string,
+  run: ActiveRun,
+): Promise<{ isStreaming: boolean; status: string } | null> {
+  const response = await fetch(`${apiUrl}/threads/${run.threadId}/runs/${run.runId}/active`);
+  if (response.status === 404) {
+    return null;
+  }
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+  }
+  const data = (await response.json()) as { is_streaming?: unknown; status?: unknown };
+  return {
+    isStreaming: data.is_streaming === true,
+    status: typeof data.status === "string" ? data.status : "unknown",
+  };
+}
+
 export function App() {
   const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
   const [threadId, setThreadId] = useState<string | null>(initialThreadId);
@@ -534,6 +565,7 @@ export function App() {
   const [logMode, setSelectedLogMode] = useState<LogMode>(() => getLogMode());
   const [error, setError] = useState<string | null>(null);
   const [activeRun, setActiveRun] = useState<ActiveRun | null>(null);
+  const [cancellingRunId, setCancellingRunId] = useState<string | null>(null);
   const [visibleMessages, setVisibleMessages] = useState<Message[]>([]);
   const [optimisticMessages, setOptimisticMessages] = useState<Message[]>([]);
   const [openThreadMenu, setOpenThreadMenu] = useState<string | null>(null);
@@ -541,6 +573,7 @@ export function App() {
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const [runCheckpointSnapshots, setRunCheckpointSnapshots] = useState<Record<string, RunCheckpointSnapshot>>({});
   const joinedRunIds = useRef(new Set<string>());
+  const joinRunStreamRef = useRef<((run: ActiveRun) => Promise<void>) | null>(null);
   const activeRunRef = useRef<ActiveRun | null>(null);
   const currentRunIdRef = useRef<string | null>(null);
   const isLoadingRef = useRef(false);
@@ -594,6 +627,30 @@ export function App() {
     },
   );
   switchThreadRef.current = stream.switchThread;
+
+  // Updated on every render so effects can call joinStream without stale-closure issues.
+  joinRunStreamRef.current = async (run: ActiveRun): Promise<void> => {
+    if (joinedRunIds.current.has(run.runId)) {
+      logger.debug("joinRunStream.skipped.alreadyJoined", run);
+      return;
+    }
+    joinedRunIds.current.add(run.runId);
+    setActiveRun((current) =>
+      current?.threadId === run.threadId && current.runId === run.runId ? null : current,
+    );
+    setCurrentRunId(run.runId);
+    logger.info("joinRunStream.start", run);
+    try {
+      await stream.joinStream(run.runId, undefined, { streamMode: [...STREAM_MODES] });
+      logger.info("joinRunStream.completed", run);
+    } catch (caught) {
+      logger.error("joinRunStream.failed", {
+        ...run,
+        message: caught instanceof Error ? caught.message : String(caught),
+      });
+    }
+  };
+
   const visibleActiveRun = activeRun?.threadId === threadId ? activeRun : null;
 
   const liveRunSubagentCards = useMemo(
@@ -958,6 +1015,7 @@ export function App() {
   async function stopActiveRun(run: ActiveRun): Promise<void> {
     logger.info("activeRun.stop.start", run);
     setError(null);
+    setCancellingRunId(run.runId);
     try {
       const response = await fetch(`${apiUrl}/threads/${run.threadId}/runs/${run.runId}/cancel`, {
         method: "POST",
@@ -965,12 +1023,14 @@ export function App() {
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${await response.text()}`);
       }
-      joinedRunIds.current.delete(run.runId);
-      setActiveRun(null);
+      // Prevent the activeRunMonitor from re-showing the banner while we wait for
+      // the run to reach a terminal state (the lifecycle SSE will call clearActiveRun).
+      joinedRunIds.current.add(run.runId);
       setCurrentRunId((runId) => (runId === run.runId ? null : runId));
       stream.clearDebugEvents();
-      logger.info("activeRun.stop.completed", run);
+      logger.info("activeRun.stop.requested", run);
     } catch (caught) {
+      setCancellingRunId(null);
       logger.error("activeRun.stop.failed", {
         threadId: run.threadId,
         runId: run.runId,
@@ -1345,19 +1405,35 @@ export function App() {
     if (!active) {
       return;
     }
-    
+
     if (joinedRunIds.current.has(active.runId) || active.runId === currentRunIdRef.current) {
       logger.debug("activeRunMonitor.skipped.alreadyJoined", { threadId, runId: active.runId });
       return;
     }
-    
+
     if (activeRunRef.current?.threadId === threadId && activeRunRef.current.runId === active.runId) {
       logger.debug("activeRunMonitor.skipped.alreadyShowing", { threadId, runId: active.runId });
       return;
     }
-    
-    logger.info("activeRun.discovered", { threadId, runId: active.runId, status: active.status });
-    setActiveRun({ threadId, runId: active.runId });
+
+    // Ask the backend whether there is a live execution task before deciding.
+    void (async () => {
+      try {
+        const result = await fetchRunActive(apiUrl, { threadId, runId: active.runId });
+        if (!result || !ACTIVE_RUN_STATUSES.has(result.status)) {
+          return;
+        }
+        if (result.isStreaming) {
+          logger.info("activeRunMonitor.autoJoin", { threadId, runId: active.runId });
+          void joinRunStreamRef.current?.({ threadId, runId: active.runId });
+        } else {
+          logger.info("activeRun.discovered", { threadId, runId: active.runId, status: result.status });
+          setActiveRun({ threadId, runId: active.runId });
+        }
+      } catch {
+        // Swallow — the lifecycle SSE or next effect run will retry.
+      }
+    })();
   }, [activeRun, currentRunId, runs, stream.isLoading, threadId]);
 
   useEffect(() => {
@@ -1377,20 +1453,30 @@ export function App() {
         logger.debug("activeRunMonitor.skipped.joined", { threadId, runId, source });
         return;
       }
-      if (activeRunRef.current?.threadId === threadId && activeRunRef.current.runId === runId) {
-        logger.debug("activeRunMonitor.skipped.bannerVisible", { threadId, runId, source });
-        return;
-      }
       try {
-        const status = await fetchRunStatus(apiUrl, { threadId, runId });
-        if (cancelled || !ACTIVE_RUN_STATUSES.has(status ?? "")) {
-          logger.debug("activeRunMonitor.skipped.notActive", { threadId, runId, source, status });
+        const active = await fetchRunActive(apiUrl, { threadId, runId });
+        if (cancelled) {
           return;
         }
-        logger.info("activeRunMonitor.discovered", { threadId, runId, source, status });
-        setActiveRun((current) =>
-          current?.threadId === threadId && current.runId === runId ? current : { threadId, runId },
-        );
+        if (active === null || !ACTIVE_RUN_STATUSES.has(active.status)) {
+          logger.debug("activeRunMonitor.skipped.notActive", { threadId, runId, source, status: active?.status });
+          return;
+        }
+        if (active.isStreaming) {
+          // Backend confirmed an active execution task — auto-join without a dialog.
+          logger.info("activeRunMonitor.autoJoin", { threadId, runId, source });
+          void joinRunStreamRef.current?.({ threadId, runId });
+        } else {
+          // No active task — show dialog so user can resume or cancel.
+          if (activeRunRef.current?.threadId === threadId && activeRunRef.current.runId === runId) {
+            logger.debug("activeRunMonitor.skipped.bannerVisible", { threadId, runId, source });
+            return;
+          }
+          logger.info("activeRunMonitor.discovered", { threadId, runId, source, status: active.status });
+          setActiveRun((current) =>
+            current?.threadId === threadId && current.runId === runId ? current : { threadId, runId },
+          );
+        }
       } catch (caught) {
         logger.warn("activeRunMonitor.discovery.failed", {
           threadId,
@@ -1403,6 +1489,7 @@ export function App() {
 
     const clearActiveRun = (runId: string, source: string): void => {
       logger.info("activeRunMonitor.clear.requested", { threadId, runId, source });
+      setCancellingRunId((current) => (current === runId ? null : current));
       setActiveRun((current) =>
         current?.threadId === threadId && current.runId === runId ? null : current,
       );
@@ -1578,17 +1665,17 @@ export function App() {
               shouldStickToBottomRef.current = isNearBottom(event.currentTarget);
             }}
           >
-            {displayedMessages.length === 0 ? (
+            {displayedMessageEntries.length === 0 ? (
               <div className="empty-state">
                 <h1>What should we research?</h1>
                 <p>Ask for a market scan, technical comparison, literature review, or sourced brief.</p>
               </div>
             ) : (
-              displayedMessages.map((message, index) => (
+              displayedMessageEntries.map((entry, index) => (
                 <MessageBubble
-                  key={messageKey(message, index)}
+                  key={`${entry.runId ?? "none"}:${entry.message.id ?? `${entry.message.type}-${index}`}`}
                   actions={actionsForMessage(index)}
-                  message={message}
+                  message={entry.message}
                   subagents={subagentCardsForMessage(index)}
                 />
               ))
@@ -1601,14 +1688,25 @@ export function App() {
           {visibleActiveRun && (
             <div className="active-run-banner">
               <div>
-                <strong>Active run found</strong>
-                <span>{visibleActiveRun.runId.slice(0, 8)} can continue from its saved checkpoint or be stopped.</span>
+                <strong>Inactive run found</strong>
+                <span>
+                  {cancellingRunId === visibleActiveRun.runId
+                    ? "Cancelling run — waiting for the agent to stop…"
+                    : `Run ${visibleActiveRun.runId.slice(0, 8)} is not actively streaming. Resume it or cancel.`}
+                </span>
               </div>
-              <button onClick={() => void continueActiveRun(visibleActiveRun)} type="button">
-                Continue streaming
-              </button>
-              <button className="secondary" onClick={() => void stopActiveRun(visibleActiveRun)} type="button">
-                Stop run
+              {cancellingRunId !== visibleActiveRun.runId && (
+                <button onClick={() => void continueActiveRun(visibleActiveRun)} type="button">
+                  Resume run
+                </button>
+              )}
+              <button
+                className="secondary"
+                disabled={cancellingRunId === visibleActiveRun.runId}
+                onClick={() => void stopActiveRun(visibleActiveRun)}
+                type="button"
+              >
+                {cancellingRunId === visibleActiveRun.runId ? "Cancelling…" : "Cancel run"}
               </button>
             </div>
           )}

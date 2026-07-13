@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import os
-import sys
 
-from celery import Celery, app
+from celery import Celery
 from celery.signals import worker_process_init
 
-if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+from worker.asyncio_policy import configure_windows_event_loop_policy
+
+configure_windows_event_loop_policy()
 
 
 def celery_broker_url() -> str:
@@ -27,9 +27,10 @@ celery_app = Celery(
     "deep_research_worker",
     broker=celery_broker_url(),
     backend=celery_result_backend(),
-    includes=["worker.tasks"],
+    include=["worker.tasks"],
 )
 celery_app.conf.update(
+    imports=("worker.tasks",),
     task_default_queue=os.getenv("STREAM_BACKEND_CELERY_QUEUE", "deep-research-runs"),
     task_default_queue_type="quorum",
     task_default_exchange="celery_topic",
@@ -53,21 +54,26 @@ celery_app.conf.update(
 )
 
 
-@worker_process_init.connect
-async def on_worker_init(**kwargs) -> None:
-    """Called when each worker process starts; recover stale runs from previous crashes."""
-    if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+# @worker_process_init.connect
+# async def on_worker_init(**kwargs) -> None:
+#     """Called when each worker process starts; recover stale runs from previous crashes."""
+#     if sys.platform == "win32":
+#         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     
-    from worker.tasks import recover_stale_runs
+#     from worker.tasks import recover_stale_runs
     
-    logger = kwargs.get("logger")
-    if logger:
-        logger.info("worker.init.recover_stale_runs")
-    try:
-        recovered = await recover_stale_runs()
-        if logger:
-            logger.info("worker.init.recovery_complete count=%s", len(recovered))
-    except Exception:
-        if logger:
-            logger.exception("worker.init.recovery_failed")
+#     logger = kwargs.get("logger")
+#     if logger:
+#         logger.info("worker.init.recover_stale_runs")
+#     try:
+#         recovered = await recover_stale_runs()
+#         if logger:
+#             logger.info("worker.init.recovery_complete count=%s", len(recovered))
+#     except Exception:
+#         if logger:
+#             logger.exception("worker.init.recovery_failed")
+
+
+# Import tasks after the Celery app is created so decorators register when the
+# worker is launched as `celery -A worker.celery_app.celery_app worker`.
+import worker.tasks  # noqa: E402,F401

@@ -1,10 +1,13 @@
 import os
+import sys
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from app.research_runtime import (
     ResearchRuntimeUnavailable,
     bedrock_model_kwargs,
+    ensure_research_agent_import_paths,
     provider_from_env,
 )
 
@@ -43,6 +46,22 @@ class ResearchRuntimeConfigTests(unittest.TestCase):
         self.assertEqual(kwargs["max_tokens"], 4096)
         self.assertNotIn("AWS_BEARER_TOKEN_BEDROCK", kwargs)
         self.assertNotIn("bearer_token", kwargs)
+
+    def test_ensure_research_agent_import_paths_adds_project_paths(self) -> None:
+        backend_dir = str(Path(__file__).resolve().parents[1])
+        project_dir = str(Path(__file__).resolve().parents[2])
+        original = list(sys.path)
+        try:
+            sys.path = [path for path in sys.path if path not in {backend_dir, project_dir}]
+
+            added = ensure_research_agent_import_paths()
+
+            self.assertTrue({backend_dir, project_dir}.intersection(sys.path))
+            self.assertTrue(set(added).issubset({backend_dir, project_dir}))
+            if backend_dir in sys.path and project_dir in sys.path:
+                self.assertLess(sys.path.index(backend_dir), sys.path.index(project_dir))
+        finally:
+            sys.path = original
 
 
 if __name__ == "__main__":

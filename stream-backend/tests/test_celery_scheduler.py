@@ -1,5 +1,8 @@
+import importlib.util
+import sys
 import unittest
 from typing import Any
+from unittest.mock import patch
 
 from app.models import RunRecord
 from app.service import ProtocolService
@@ -22,6 +25,9 @@ class FakeRunScheduler:
 
     def revoke(self, task_id: str, *, terminate: bool = False) -> None:
         self.revokes.append((task_id, terminate))
+
+    def is_task_active(self, task_id: str) -> bool:
+        return task_id.startswith("task-")
 
 
 class CelerySchedulerTests(unittest.IsolatedAsyncioTestCase):
@@ -95,7 +101,8 @@ class CelerySchedulerTests(unittest.IsolatedAsyncioTestCase):
         )
         await repo.create_run(run)
 
-        cancelled = await service.cancel_run("thread-1", "run-1")
+        with patch.dict("os.environ", {"STREAM_BACKEND_CELERY_TERMINATE_ON_CANCEL": "false"}):
+            cancelled = await service.cancel_run("thread-1", "run-1")
         saved = await repo.get_run("thread-1", "run-1")
 
         self.assertTrue(cancelled)
@@ -103,6 +110,30 @@ class CelerySchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(saved)
         self.assertTrue(saved.cancel_requested)
         self.assertEqual(saved.status, "interrupted")
+
+
+@unittest.skipIf(importlib.util.find_spec("celery") is None, "celery is not installed")
+class CeleryTaskRegistrationTests(unittest.TestCase):
+    def test_worker_tasks_are_registered_when_app_module_loads(self) -> None:
+        from worker.celery_app import celery_app
+
+        self.assertIn("deep_research.run_agent", celery_app.tasks)
+        self.assertIn("deep_research.resume_agent", celery_app.tasks)
+
+
+class WindowsEventLoopPolicyTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "win32", "Windows-only event loop policy")
+    def test_worker_uses_selector_event_loop_policy_on_windows(self) -> None:
+        import asyncio
+
+        from worker.asyncio_policy import configure_windows_event_loop_policy
+
+        configure_windows_event_loop_policy()
+
+        self.assertIsInstance(
+            asyncio.get_event_loop_policy(),
+            asyncio.WindowsSelectorEventLoopPolicy,
+        )
 
 
 if __name__ == "__main__":

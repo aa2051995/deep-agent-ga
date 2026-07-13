@@ -157,6 +157,28 @@ class ProtocolService:
         except asyncio.CancelledError:
             logger.info("service.task.cancelled thread_id=%s run_id=%s remaining_tasks=%s", thread_id, run_id, len(self.tasks))
 
+    async def is_run_streaming(self, thread_id: str, run_id: str, run: RunRecord) -> bool:
+        """Return True only when there is an active execution task for this run."""
+        if run.status not in ACTIVE_RUN_STATUSES:
+            return False
+        if self.runner_backend == "celery":
+            if self.run_scheduler is None:
+                return False
+            celery_task_id = run.metadata.get("celery_task_id")
+            if not celery_task_id:
+                return False
+            try:
+                return self.run_scheduler.is_task_active(celery_task_id)
+            except Exception:
+                logger.warning(
+                    "service.is_run_streaming.celery_check_failed thread_id=%s run_id=%s",
+                    thread_id,
+                    run_id,
+                )
+                return False
+        task = self.run_tasks.get((thread_id, run_id))
+        return task is not None and not task.done()
+
     async def _latest_run_state(self, thread_id: str, run_id: str) -> ThreadState | None:
         history = await self.repo.get_history(thread_id, limit=200)
         for state in history:

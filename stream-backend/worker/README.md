@@ -29,7 +29,20 @@ $env:RABBITMQ_STREAM_URL = "rabbitmq-stream://guest:guest@localhost:5552/"
 Run this from `stream-backend`:
 
 ```powershell
-celery -A worker.celery_app.celery_app worker --loglevel=INFO --queues=deep-research-runs
+celery -A worker.celery_app.celery_app worker --loglevel=INFO -P threads --queues=deep-research-runs
+```
+
+Before submitting a run, you can verify task registration:
+
+```powershell
+celery -A worker.celery_app.celery_app inspect registered
+```
+
+The worker startup output should include:
+
+```text
+deep_research.run_agent
+deep_research.resume_agent
 ```
 
 To cancel Celery tasks with process termination when the API receives a cancel

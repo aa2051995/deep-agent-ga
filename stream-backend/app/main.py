@@ -119,22 +119,24 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["Content-Location"],
 )
-
-def create_repository():
+def set_env():
     os.environ.setdefault("STREAM_BACKEND_STORE", "postgres")  # --- IGNORE ---
     os.environ.setdefault("STREAM_BACKEND_POSTGRES_URI", "postgresql://postgres:am12345Eee@localhost:5432/myapp")  # --- IGNORE ---
     os.environ.setdefault("RESEARCH_AGENT_PROVIDER", "bedrock")
     os.environ.setdefault("RESEARCH_AGENT_MODEL", "moonshotai.kimi-k2.5")
     os.environ.setdefault("AWS_REGION", "eu-north-1")
     os.environ.setdefault("AWS_BEDROCK_PROFILE", "my-profile")
-    os.environ.setdefault("STREAM_BACKEND_RUNNER_BACKEND", "celery")
-    os.environ.setdefault("STREAM_BACKEND_CELERY_BROKER_URL", "amqp://guest:guest@localhost:5672//")
+    # os.environ.setdefault("STREAM_BACKEND_RUNNER_BACKEND", "")
+    # os.environ.setdefault("STREAM_BACKEND_CELERY_BROKER_URL", "amqp://guest:guest@localhost:5672//")
     os.environ.setdefault("TAVILY_API_KEY", "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")
     os.environ.setdefault("GOOGLE_API_KEY", "AIzaSyBx0JdmhyXdoufg23j2Ec69ej968-LSymU")  # --- IGNORE ---
     os.environ.setdefault("STREAM_BACKEND_EVENT_BROKER", "rabbitmq")
-    os.environ.setdefault("RABBITMQ_STREAM_URL", "rabbitmq-stream://guest:guest@localhost:5552/")
+    os.environ.setdefault("RABBITMQ_STREAM_URL", "rabbitmq-stream://guest:guest@127.0.0.1:5552/")
     os.environ.setdefault("STREAM_BACKEND_CELERY_QUEUE", "deep-research-runs")
     os.environ.setdefault("STREAM_BACKEND_CELERY_TERMINATE_ON_CANCEL", "true")
+set_env()
+def create_repository():
+   
     mode = os.getenv("STREAM_BACKEND_STORE", "memory").lower()
     logger.info("repository.create.start mode=%s", mode)
     if mode == "postgres":
@@ -1072,6 +1074,20 @@ async def get_run(thread_id: str, run_id: str) -> dict:
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
     return run.model_dump()
+
+
+@app.get("/threads/{thread_id}/runs/{run_id}/active")
+async def check_run_active(thread_id: str, run_id: str) -> dict:
+    """Return whether the run has an active execution task (worker or asyncio task)."""
+    run = await repo.get_run(thread_id, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    is_streaming = await service.is_run_streaming(thread_id, run_id, run)
+    logger.info(
+        "run.active.check thread_id=%s run_id=%s status=%s is_streaming=%s",
+        thread_id, run_id, run.status, is_streaming,
+    )
+    return {"is_streaming": is_streaming, "status": run.status}
 
 
 @app.get("/threads/{thread_id}/runs/{run_id}/checkpoints")
