@@ -114,6 +114,9 @@ export type RunCheckpointSnapshot = {
     next: string[];
     created_at: string | null;
   }>;
+  // True when the backend served this from the pre-projected run-snapshot
+  // table (fast path) rather than re-deriving it from checkpoint history.
+  fromSnapshot: boolean;
 };
 
 export type ThreadSummary = {

@@ -105,6 +105,7 @@ The service warns if `runner_backend=celery` is used without `store=postgres` + 
   1. **Application store** — `PostgresRepository` auto-creates and manages:
      - `stream_threads` (thread_id PK; assistant_id, metadata, `state` JSONB, `history` JSONB)
      - `stream_runs` (composite PK thread_id+run_id; status, metadata, kwargs, multitask_strategy, cancel_requested; index on (thread_id, created_at))
+     - `stream_run_snapshots` (composite PK thread_id+run_id; status, checkpoint_id, `data` JSONB) — the pre-projected view of a finished run (messages, todos, subagents, checkpoints), written once on run completion so the run-checkpoints endpoint can serve it with a single keyed lookup instead of re-scanning the thread's checkpoint history; index on (thread_id, updated_at).
      - `stream_events` (thread_id+seq PK; `event` JSONB) — the append-only event log.
   2. **LangGraph checkpointer** — `AsyncPostgresSaver` from `langgraph-checkpoint-postgres`, set up in `research_runtime.py:375-399` for true agent state/resume.
 - **In-memory fallback** — `InMemoryRepository` (dev/test); events capped at 1000/thread.
@@ -184,7 +185,7 @@ _mirror_agent_event → PublishingRepository.append_event
         StreamSubscriptionManager.iter_events → SSE/WS → UI
 ```
 
-Persistence of agent state happens twice: the backend writes its own `ThreadState`/checkpoint snapshots (`_save_final_snapshot`, via `aget_state`), and LangGraph's `AsyncPostgresSaver` maintains the real graph checkpoints enabling `resume`.
+Persistence of agent state happens twice: the backend writes its own `ThreadState`/checkpoint snapshots (`_save_final_snapshot`, via `aget_state`), and LangGraph's `AsyncPostgresSaver` maintains the real graph checkpoints enabling `resume`. When a run reaches success, the runner additionally projects it once and writes a `RunSnapshot` to `stream_run_snapshots` (`_persist_run_snapshot`), collapsing the run's messages/todos/subagents/checkpoints into a single row for fast retrieval.
 
 ---
 

@@ -42,6 +42,7 @@ type RunCheckpointApiItem = {
   todos?: unknown;
   subagents?: unknown;
   checkpoints?: unknown;
+  from_snapshot?: unknown;
 };
 
 function textFromContent(content: unknown): string {
@@ -252,14 +253,16 @@ export async function getRunCheckpointSnapshot(
         };
       })
     : [];
+  const fromSnapshot = body.from_snapshot === true;
   logger.info("api.runs.checkpoints.complete", {
     threadId,
     runId,
     messages: messages.length,
     subagents: subagents.length,
     checkpoints: checkpoints.length,
+    fromSnapshot,
   });
-  return { run, values, messages, todos, subagents, checkpoints };
+  return { run, values, messages, todos, subagents, checkpoints, fromSnapshot };
 }
 
 export async function createThread(apiUrl: string): Promise<string> {

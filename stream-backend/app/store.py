@@ -10,6 +10,7 @@ from .models import (
     EventParams,
     ProtocolEvent,
     RunRecord,
+    RunSnapshot,
     ThreadRecord,
     ThreadState,
     new_id,
@@ -29,6 +30,8 @@ class Repository(Protocol):
     async def get_run(self, thread_id: str, run_id: str) -> RunRecord | None: ...
     async def list_runs(self, thread_id: str, limit: int = 10, offset: int = 0, status: str | None = None) -> list[RunRecord]: ...
     async def save_run(self, run: RunRecord) -> None: ...
+    async def save_run_snapshot(self, snapshot: RunSnapshot) -> None: ...
+    async def get_run_snapshot(self, thread_id: str, run_id: str) -> RunSnapshot | None: ...
     async def append_event(self, thread_id: str, method: str, data: object, namespace: list[str] | None = None, node: str | None = None) -> ProtocolEvent: ...
     async def list_events(self, thread_id: str, since: int | None = None) -> list[ProtocolEvent]: ...
     async def wait_for_event(self, thread_id: str, after_seq: int | None, timeout: float) -> None: ...
@@ -51,6 +54,7 @@ class InMemoryRepository:
     def __init__(self) -> None:
         self._threads: dict[str, ThreadRecord] = {}
         self._runs: dict[tuple[str, str], RunRecord] = {}
+        self._run_snapshots: dict[tuple[str, str], RunSnapshot] = {}
         self._events: dict[str, list[ProtocolEvent]] = defaultdict(list)
         self._conditions: dict[str, asyncio.Condition] = defaultdict(asyncio.Condition)
         self._lock = asyncio.Lock()
@@ -89,6 +93,8 @@ class InMemoryRepository:
             self._conditions.pop(thread_id, None)
             for key in [key for key in self._runs if key[0] == thread_id]:
                 self._runs.pop(key, None)
+            for key in [key for key in self._run_snapshots if key[0] == thread_id]:
+                self._run_snapshots.pop(key, None)
             return existed
 
     async def update_thread_metadata(self, thread_id: str, metadata: dict[str, object]) -> ThreadRecord | None:
@@ -151,6 +157,16 @@ class InMemoryRepository:
         async with self._lock:
             run.updated_at = now_iso()
             self._runs[(run.thread_id, run.run_id)] = deepcopy(run)
+
+    async def save_run_snapshot(self, snapshot: RunSnapshot) -> None:
+        async with self._lock:
+            snapshot.updated_at = now_iso()
+            self._run_snapshots[(snapshot.thread_id, snapshot.run_id)] = deepcopy(snapshot)
+
+    async def get_run_snapshot(self, thread_id: str, run_id: str) -> RunSnapshot | None:
+        async with self._lock:
+            snapshot = self._run_snapshots.get((thread_id, run_id))
+            return deepcopy(snapshot) if snapshot else None
 
     async def append_event(
         self,

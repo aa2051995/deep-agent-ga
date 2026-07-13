@@ -525,14 +525,23 @@ sequenceDiagram
     alt missing
         API-->>Client: 404 Run not found
     else found
-        API->>Repo: get_history(id, limit)
-        Repo->>Store: get_history(...)
-        Store-->>API: [ThreadState]
-        API->>API: project_run_checkpoints(run, history)
-        Note over API: derives run messages, todos,<br/>subagents, checkpoints
-        API-->>Client: 200 {run, values, messages, todos, subagents, checkpoints}
+        API->>Repo: get_run_snapshot(id, run_id)
+        Repo->>Store: get_run_snapshot(...)
+        alt snapshot exists (finished run — fast path)
+            Store-->>API: RunSnapshot
+            API-->>Client: 200 {run, values, messages, todos, subagents, checkpoints, from_snapshot: true}
+        else no snapshot (run in progress / legacy)
+            API->>Repo: get_history(id, limit)
+            Repo->>Store: get_history(...)
+            Store-->>API: [ThreadState]
+            API->>API: project_run_checkpoints(run, history)
+            Note over API: derives run messages, todos,<br/>subagents, checkpoints
+            API-->>Client: 200 {run, values, messages, todos, subagents, checkpoints}
+        end
     end
 ```
+
+> **Run-snapshot fast path.** When a run reaches a terminal state the runner projects it once and stores the result in `stream_run_snapshots`. This endpoint returns that pre-computed row with a single keyed lookup (`from_snapshot: true`) instead of loading and re-scanning up to `limit` checkpoint history entries on every request. It transparently falls back to the live projection while the run is still executing or for runs that predate snapshots.
 
 ---
 

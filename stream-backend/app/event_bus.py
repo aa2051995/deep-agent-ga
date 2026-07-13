@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 from urllib.parse import unquote, urlparse
 
-from .models import EventParams, ProtocolEvent, RunRecord, ThreadRecord, ThreadState, now_ms
+from .models import EventParams, ProtocolEvent, RunRecord, RunSnapshot, ThreadRecord, ThreadState, now_ms
 from .store import Repository
 
 logger = logging.getLogger("stream_backend.event_bus")
@@ -554,6 +554,12 @@ class PublishingRepository:
 
     async def save_run(self, run: RunRecord) -> None:
         await self.inner.save_run(run)
+
+    async def save_run_snapshot(self, snapshot: RunSnapshot) -> None:
+        await self.inner.save_run_snapshot(snapshot)
+
+    async def get_run_snapshot(self, thread_id: str, run_id: str) -> RunSnapshot | None:
+        return await self.inner.get_run_snapshot(thread_id, run_id)
 
     async def append_event(
         self,

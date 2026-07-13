@@ -6,6 +6,7 @@ from copy import deepcopy
 from typing import Any
 
 from .models import Checkpoint, RunRecord, ThreadState, new_id, now_iso
+from .projections import build_run_snapshot
 from .store import Repository
 
 logger = logging.getLogger("stream_backend.fixture")
@@ -206,12 +207,39 @@ class DeepAgentDemoRunner:
 
         run.status = "success"
         await self.repo.save_run(run)
+        await self._persist_run_snapshot(run)
         await self.repo.append_event(
             run.thread_id,
             "lifecycle",
             {"event": "completed", "run_id": run.run_id},
         )
         logger.info("fixture.run.success thread_id=%s run_id=%s", run.thread_id, run.run_id)
+
+    async def _persist_run_snapshot(self, run: RunRecord) -> None:
+        """Project the finished run once and store it for fast retrieval.
+
+        Mirrors the research runner: builds the run-scoped view from the saved
+        checkpoint history and writes it to the run-snapshot table so the
+        checkpoints endpoint can serve it with a single keyed lookup.
+        """
+        try:
+            history = await self.repo.get_history(run.thread_id, limit=200)
+            snapshot = build_run_snapshot(run, history)
+            await self.repo.save_run_snapshot(snapshot)
+            logger.info(
+                "fixture.run_snapshot.saved thread_id=%s run_id=%s checkpoint_id=%s messages=%s subagents=%s",
+                run.thread_id,
+                run.run_id,
+                snapshot.checkpoint_id,
+                len(snapshot.messages),
+                len(snapshot.subagents),
+            )
+        except Exception:
+            logger.exception(
+                "fixture.run_snapshot.failed thread_id=%s run_id=%s",
+                run.thread_id,
+                run.run_id,
+            )
 
     async def _mark_running(self, run: RunRecord) -> None:
         logger.info("fixture.run.mark_running thread_id=%s run_id=%s", run.thread_id, run.run_id)

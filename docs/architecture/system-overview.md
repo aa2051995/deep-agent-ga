@@ -97,21 +97,22 @@ flowchart TB
 
 | Module | Responsibility |
 |---|---|
-| `main.py` | FastAPI app; all HTTP/SSE/WebSocket routes; dual SSE frame formatting (legacy SDK + protocol-v2); run-checkpoint projection; app startup/shutdown hooks; logging config. |
+| `main.py` | FastAPI app; all HTTP/SSE/WebSocket routes; dual SSE frame formatting (legacy SDK + protocol-v2); serves the run-checkpoints view from the run-snapshot fast path (falling back to live projection); app startup/shutdown hooks; logging config. |
 | `service.py` | `ProtocolService` — command dispatch, run scheduling (asyncio vs Celery), start/cancel/resume, one-active-run-per-thread guard, dead-task reschedule/recovery. `AutoResearchRunner` (research → fixture fallback). |
 | `streaming.py` | `StreamSubscriptionManager` — subscribes clients to a thread's event stream, tracks `RunHandle`s, filters events (`RunStreamFilter`, `ProtocolStreamFilter`), cleans up on terminal events/disconnect. |
 | `event_bus.py` | `PublishingRepository` (persist+publish decorator); `InMemoryEventBroker` and `RabbitMQStreamBroker`; broker factory. |
-| `store.py` | `Repository` Protocol + `InMemoryRepository` (threads, runs, events, condition-based waits). |
-| `store_postgres.py` | `PostgresRepository` — durable `stream_threads`, `stream_runs`, `stream_events`; schema bootstrap; sequence generation. |
+| `store.py` | `Repository` Protocol + `InMemoryRepository` (threads, runs, run snapshots, events, condition-based waits). |
+| `store_postgres.py` | `PostgresRepository` — durable `stream_threads`, `stream_runs`, `stream_run_snapshots`, `stream_events`; schema bootstrap; sequence generation. |
+| `projections.py` | Derives run-scoped views from checkpoint history (`project_run_checkpoints`); `build_run_snapshot` projects a finished run once for storage. |
 | `protocol.py` | Channel/namespace subscription matching and SSE frame serialization. |
-| `models.py` | Pydantic models: `ThreadRecord`, `RunRecord`, `ThreadState`, `Checkpoint`, `ProtocolCommand/Event/Success/Error`. |
+| `models.py` | Pydantic models: `ThreadRecord`, `RunRecord`, `RunSnapshot`, `ThreadState`, `Checkpoint`, `ProtocolCommand/Event/Success/Error`. |
 | `runtime.py` | Repo/broker factory (`create_publishing_repository`) used by workers. |
 
 ### Execution Tier
 
 | Module | Responsibility |
 |---|---|
-| `app/research_runtime.py` | `ResearchDeepAgentRunner` — builds the deepagents agent, runs `astream_events` (v2), mirrors LangChain events into protocol events, manages the Postgres checkpointer, resolves Bedrock model IDs, hot-reloads prompts on file mtime change, saves final state snapshots. |
+| `app/research_runtime.py` | `ResearchDeepAgentRunner` — builds the deepagents agent, runs `astream_events` (v2), mirrors LangChain events into protocol events, manages the Postgres checkpointer, resolves Bedrock model IDs, hot-reloads prompts on file mtime change, saves final state snapshots, and persists a per-run snapshot (`stream_run_snapshots`) on completion for fast retrieval. |
 | `app/deep_agent.py` | `DeepAgentDemoRunner` — deterministic scripted event stream used as a fallback and for tests. |
 | `worker/celery_app.py` | Celery app configuration (broker, quorum queues, serialization, acks). |
 | `worker/tasks.py` | `run_agent` / `resume_agent` tasks; `WorkerShutdownManager` for graceful drain; `recover_stale_runs`. |
@@ -145,7 +146,7 @@ flowchart TB
 ## External Dependencies
 
 ### Runtime services / infrastructure
-- **PostgreSQL** — application store (`stream_threads`, `stream_runs`, `stream_events`) and the LangGraph `AsyncPostgresSaver` checkpointer.
+- **PostgreSQL** — application store (`stream_threads`, `stream_runs`, `stream_run_snapshots`, `stream_events`) and the LangGraph `AsyncPostgresSaver` checkpointer.
 - **RabbitMQ** — two roles: the **Streams protocol** (port 5552, via `rstream`) as the streaming event bus, and **AMQP** (port 5672) as the Celery task-queue broker.
 - **Celery** — distributed task execution for agent runs (optional; asyncio in-process is the default).
 

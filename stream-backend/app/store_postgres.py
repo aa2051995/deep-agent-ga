@@ -10,6 +10,7 @@ from .models import (
     EventParams,
     ProtocolEvent,
     RunRecord,
+    RunSnapshot,
     ThreadRecord,
     ThreadState,
     now_iso,
@@ -84,6 +85,27 @@ class PostgresRepository:
                 """
                 CREATE INDEX IF NOT EXISTS stream_runs_thread_created_idx
                 ON stream_runs (thread_id, created_at DESC)
+                """
+            )
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS stream_run_snapshots (
+                    thread_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    assistant_id TEXT,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    checkpoint_id TEXT,
+                    data JSONB NOT NULL,
+                    PRIMARY KEY (thread_id, run_id)
+                )
+                """
+            )
+            await conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS stream_run_snapshots_thread_updated_idx
+                ON stream_run_snapshots (thread_id, updated_at DESC)
                 """
             )
             await conn.execute(
@@ -217,6 +239,7 @@ class PostgresRepository:
             async with pool.connection() as conn:
                 async with conn.transaction():
                     await conn.execute("DELETE FROM stream_events WHERE thread_id = %s", (thread_id,))
+                    await conn.execute("DELETE FROM stream_run_snapshots WHERE thread_id = %s", (thread_id,))
                     await conn.execute("DELETE FROM stream_runs WHERE thread_id = %s", (thread_id,))
                     result = await conn.execute("DELETE FROM stream_threads WHERE thread_id = %s", (thread_id,))
         return result.rowcount > 0
@@ -403,6 +426,53 @@ class PostgresRepository:
                     run.cancel_requested,
                 ),
             )
+
+    async def save_run_snapshot(self, snapshot: RunSnapshot) -> None:
+        pool = self._require_pool()
+        snapshot.updated_at = now_iso()
+        async with pool.connection() as conn:
+            await conn.execute(
+                """
+                INSERT INTO stream_run_snapshots (
+                    thread_id, run_id, assistant_id, status, created_at, updated_at,
+                    checkpoint_id, data
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (thread_id, run_id) DO UPDATE SET
+                    assistant_id = EXCLUDED.assistant_id,
+                    status = EXCLUDED.status,
+                    updated_at = EXCLUDED.updated_at,
+                    checkpoint_id = EXCLUDED.checkpoint_id,
+                    data = EXCLUDED.data
+                """,
+                (
+                    snapshot.thread_id,
+                    snapshot.run_id,
+                    snapshot.assistant_id,
+                    snapshot.status,
+                    snapshot.created_at,
+                    snapshot.updated_at,
+                    snapshot.checkpoint_id,
+                    self._json(snapshot.model_dump(mode="json")),
+                ),
+            )
+
+    async def get_run_snapshot(self, thread_id: str, run_id: str) -> RunSnapshot | None:
+        pool = self._require_pool()
+        async with pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    """
+                    SELECT data
+                    FROM stream_run_snapshots
+                    WHERE thread_id = %s AND run_id = %s
+                    """,
+                    (thread_id, run_id),
+                )
+            ).fetchone()
+        if row is None:
+            return None
+        return RunSnapshot.model_validate(row[0])
 
     async def append_event(
         self,

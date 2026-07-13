@@ -77,6 +77,41 @@ class RunRecord(BaseModel):
     cancel_requested: bool = False
 
 
+class RunSnapshot(BaseModel):
+    """Finalized, pre-projected view of a completed run.
+
+    Persisted to a dedicated table when a run reaches a terminal state so run
+    data can be fetched with a single keyed lookup instead of scanning the
+    thread's checkpoint history.
+    """
+
+    thread_id: str
+    run_id: str
+    assistant_id: str | None = None
+    status: str = "success"
+    created_at: str = Field(default_factory=now_iso)
+    updated_at: str = Field(default_factory=now_iso)
+    checkpoint_id: str | None = None
+    run: JsonDict = Field(default_factory=dict)
+    values: JsonDict = Field(default_factory=dict)
+    messages: list[JsonDict] = Field(default_factory=list)
+    todos: list[Any] = Field(default_factory=list)
+    subagents: list[JsonDict] = Field(default_factory=list)
+    checkpoints: list[JsonDict] = Field(default_factory=list)
+
+    def to_projection(self) -> JsonDict:
+        """Return the shape served by the run-checkpoints endpoint."""
+        return {
+            "run": self.run,
+            "values": self.values,
+            "messages": self.messages,
+            "todos": self.todos,
+            "subagents": self.subagents,
+            "checkpoints": self.checkpoints,
+            "from_snapshot": True,
+        }
+
+
 class ProtocolCommand(BaseModel):
     id: int
     method: str

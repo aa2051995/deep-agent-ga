@@ -11,6 +11,7 @@ from typing import Any
 
 from .deep_agent import ai_message, human_message, input_text
 from .models import Checkpoint, RunRecord, ThreadState, new_id, now_iso
+from .projections import build_run_snapshot
 from .store import Repository
 
 logger = logging.getLogger("stream_backend.research_runtime")
@@ -463,6 +464,7 @@ class ResearchDeepAgentRunner:
             await self._save_final_snapshot(run, agent, config, final_text)
             run.status = "success"
             await self.repo.save_run(run)
+            await self._persist_run_snapshot(run)
             await self.repo.append_event(
                 run.thread_id,
                 "lifecycle",
@@ -552,6 +554,7 @@ class ResearchDeepAgentRunner:
             await self._save_final_snapshot(run, agent, config, final_text, fallback_messages=messages)
             run.status = "success"
             await self.repo.save_run(run)
+            await self._persist_run_snapshot(run)
             await self.repo.append_event(
                 run.thread_id,
                 "lifecycle",
@@ -628,6 +631,34 @@ class ResearchDeepAgentRunner:
             },
         )
         await self.repo.append_event(run.thread_id, "values", {**values, "run_id": run.run_id})
+
+    async def _persist_run_snapshot(self, run: RunRecord) -> None:
+        """Project the finished run once and store it for fast retrieval.
+
+        Reads the freshly-saved checkpoint history, builds the run-scoped view,
+        and writes it to the run-snapshot table so the checkpoints endpoint can
+        serve it with a single keyed lookup instead of re-scanning history.
+        """
+        try:
+            history = await self.repo.get_history(run.thread_id, limit=200)
+            snapshot = build_run_snapshot(run, history)
+            await self.repo.save_run_snapshot(snapshot)
+            logger.info(
+                "research.run_snapshot.saved thread_id=%s run_id=%s checkpoint_id=%s messages=%s subagents=%s",
+                run.thread_id,
+                run.run_id,
+                snapshot.checkpoint_id,
+                len(snapshot.messages),
+                len(snapshot.subagents),
+            )
+        except Exception:
+            # A snapshot failure must not fail the run; the checkpoints endpoint
+            # transparently falls back to projecting from history.
+            logger.exception(
+                "research.run_snapshot.failed thread_id=%s run_id=%s",
+                run.thread_id,
+                run.run_id,
+            )
 
     async def _mirror_agent_event(
         self,
