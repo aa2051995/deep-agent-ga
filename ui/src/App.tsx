@@ -1391,6 +1391,7 @@ export function App() {
     });
     loggedMessageTextRef.current.clear();
     setCurrentRunId(null);
+    // Clear debug events so that the next run can start fresh.
     stream.clearDebugEvents();
     void refreshRuns(threadId);
     // refreshRuns intentionally owns async persisted reload after terminal lifecycle events.
