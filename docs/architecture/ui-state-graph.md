@@ -196,9 +196,10 @@ For each state: **updaters** (setter call sites), **readers**, **effects that de
 
 ### 10. `visibleMessages`
 - **Updated by:** `setVisibleMessages` — E2 (from `stream.messages`), `resetVisibleThread`, E11, E14.
-- **Read by:** `displayedMessageEntries` (M7), `latestUserIndex`.
+- **Read by:** `displayedMessageEntries` (M7) via `liveRunMessages` (`messageMerge.ts`).
 - **Effects depending:** none (E2 writes it).
 - **Memos depending:** M7.
+- **Note:** `stream.messages` accumulates the whole thread's history. `displayedMessageEntries` isolates the current run's live tail with `liveRunMessages`, whose boundary is the **last already-persisted message** (not the last human message). The old "slice from the last human" heuristic mis-bounded joined/resumed runs, bleeding earlier-run messages into the live bucket (duplication + wrong run attribution).
 - **Callbacks modifying:** `resetVisibleThread`.
 
 ### 11. `optimisticMessages`

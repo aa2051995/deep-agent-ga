@@ -20,6 +20,7 @@ import { DEFAULT_API_URL, messageText, useDeepResearchStream } from "./stream";
 import type { DebugEvent, DeepResearchStream } from "./stream";
 import { selectInputRequests, subagentStreamToCard } from "./selectors";
 import { hasEarlierUnhydratedRuns, selectRunsToHydrate } from "./runHydration";
+import { liveRunMessages } from "./messageMerge";
 import type { InputRequest, ProtocolEvent, RunCheckpointSnapshot, RunSummary, SubagentCard, ThreadSummary } from "./types";
 
 const CURRENT_THREAD_KEY = "deep-research-ui:current-thread";
@@ -219,15 +220,6 @@ function sameMessage(left: Message, right: Message): boolean {
 
 function isNearBottom(element: HTMLElement, threshold = 96): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= threshold;
-}
-
-function latestUserIndex(messages: Message[]): number {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index].type === "human") {
-      return index;
-    }
-  }
-  return -1;
 }
 
 function actionFromTool(name: string, input: unknown): string {
@@ -697,14 +689,14 @@ export function App() {
       currentRunStatus !== null &&
       PERSISTED_RUN_STATUSES.has(currentRunStatus) &&
       currentRunSnapshotLoaded;
-    const liveStartIndex = currentRunId ? latestUserIndex(visibleMessages) : -1;
-    const liveCandidateMessages =
+    // Live messages = the tail of the accumulated stream after the last message
+    // that already belongs to a persisted (earlier) run. This keeps earlier-run
+    // messages from bleeding into the current run when the current run's own
+    // human prompt is not the most recent human in the stream (joined/resumed).
+    const liveMessages =
       currentRunId !== null && !currentRunHasPersistedSnapshot
-        ? visibleMessages.slice(Math.max(liveStartIndex, 0))
+        ? liveRunMessages(visibleMessages, persistedMessages, sameMessage)
         : [];
-    const liveMessages = liveCandidateMessages.filter((message) => {
-      return !persistedMessages.some((persisted) => sameMessage(persisted, message));
-    });
     const liveEntries = liveMessages.map((message) => ({ message, runId: currentRunId }));
     const confirmed = [...persistedMessageEntries, ...liveEntries];
     const pending = optimisticMessages.filter(
@@ -1125,7 +1117,7 @@ export function App() {
       setError(caught instanceof Error ? caught.message : "Unable to delete thread.");
     }
   }
-
+//E1
   useEffect(() => {
     const closeMenu = (): void => setOpenThreadMenu(null);
     const closeOnEscape = (event: KeyboardEvent): void => {
@@ -1140,7 +1132,7 @@ export function App() {
       window.removeEventListener("keydown", closeOnEscape);
     };
   }, []);
-
+//E2
   useEffect(() => {
     if (stream.messages.length === 0) {
       return;
@@ -1158,14 +1150,14 @@ export function App() {
           ),
     );
   }, [currentRunId, stream.isLoading, stream.messages]);
-
+//E3
   useLayoutEffect(() => {
     if (!shouldStickToBottomRef.current) {
       return;
     }
     messagesEndRef.current?.scrollIntoView({ block: "end" });
   }, [displayedMessages]);
-
+//E$
   useEffect(() => {
     const viewport = messagesViewportRef.current;
     if (!viewport) {
@@ -1178,14 +1170,14 @@ export function App() {
     viewport.addEventListener("scroll", handleScroll, { passive: true });
     return () => viewport.removeEventListener("scroll", handleScroll);
   }, []);
-
+//E5
   useEffect(() => {
     activeRunRef.current = activeRun;
     isLoadingRef.current = stream.isLoading;
     currentRunIdRef.current = currentRunId;
     threadIdRef.current = threadId;
   }, [activeRun, currentRunId, stream.isLoading, threadId]);
-
+//E6
   useEffect(() => {
     if (stream.error) {
       logger.error("stream.error", {
@@ -1194,7 +1186,7 @@ export function App() {
       setError(stream.error instanceof Error ? stream.error.message : String(stream.error));
     }
   }, [stream.error]);
-
+//E7
   useEffect(() => {
     if (threadId && threadIdFromUrl() !== threadId) {
       writeThreadUrl(threadId, true);
@@ -1202,7 +1194,7 @@ export function App() {
     // This only normalizes the initial localStorage fallback into the address bar.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
+//E8
   useEffect(() => {
     let cancelled = false;
     setThreadsLoading(true);
@@ -1232,7 +1224,7 @@ export function App() {
       cancelled = true;
     };
   }, [apiUrl]);
-
+//E9
   useEffect(() => {
     const requestSeq = threadRequestSeqRef.current;
     const controller = new AbortController();
@@ -1243,7 +1235,7 @@ export function App() {
     // refreshRuns intentionally reads the latest refs for stale-response guards.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiUrl, threadId]);
-
+//E10
   useEffect(() => {
     if (!threadId) {
       return undefined;
@@ -1313,7 +1305,7 @@ export function App() {
       controller.abort();
     };
   }, [apiUrl, currentRunId, hydratedRunLimit, runCheckpointSnapshots, runs, runsInMessageOrder, threadId]);
-
+//E11
   useEffect(() => {
     const handlePopState = (): void => {
       const nextThreadId = threadIdFromUrl();
@@ -1340,7 +1332,7 @@ export function App() {
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
-
+//E12
   useEffect(() => {
     if (!activeRun) {
       return undefined;
@@ -1348,7 +1340,7 @@ export function App() {
     
     return undefined;
   }, [activeRun, apiUrl]);
-
+//E13
   useEffect(() => {
     if (!currentRunId || stream.isLoading) {
       return;
@@ -1361,7 +1353,7 @@ export function App() {
       setCurrentRunId(null);
     }
   }, [currentRunId, currentRunSnapshotLoaded, currentRunStatus, stream.isLoading, threadId]);
-
+//E14
   useEffect(() => {
     if (!threadId || !currentRunId || handledTerminalRunIdsRef.current.has(currentRunId)) {
       return;
@@ -1404,7 +1396,7 @@ export function App() {
     // refreshRuns intentionally owns async persisted reload after terminal lifecycle events.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentRunId, stream.debugEvents, threadId]);
-
+//E15
   useEffect(() => {
     if (!threadId || stream.isLoading) {
       return;
@@ -1443,7 +1435,7 @@ export function App() {
       }
     })();
   }, [activeRun, currentRunId, runs, stream.isLoading, threadId]);
-
+//16
   useEffect(() => {
     if (!threadId) {
       logger.debug("activeRunMonitor.skipped.noThread");
