@@ -184,6 +184,27 @@ celery -A worker.celery_app worker --pool=solo --queues=deep-research-runs      
 celery -A worker.celery_app worker --pool=threads --concurrency=8 --queues=deep-research-runs  # concurrent, I/O-bound
 ```
 
+### 7. `'DisabledBackend' object has no attribute '_get_task_meta_for'`
+
+**Symptom:** The API logs `celery.task_status.failed` with:
+```
+AttributeError: 'DisabledBackend' object has no attribute '_get_task_meta_for'
+```
+
+**Cause:** No **result backend** is configured (`STREAM_BACKEND_CELERY_RESULT_BACKEND`
+is unset), so Celery uses `DisabledBackend` and `AsyncResult.status` cannot be read.
+
+**Fix:** Already handled in code — a result backend is **optional**. The API
+detects a disabled backend and checks whether a run is still executing via the
+worker **inspect** API over the broker instead (`is_task_active`), so no result
+backend is required. If you *want* result-backend status (e.g. richer/faster
+polling), set one, for example:
+```bash
+export STREAM_BACKEND_CELERY_RESULT_BACKEND="rpc://"            # uses RabbitMQ/AMQP
+# or a database backend:
+export STREAM_BACKEND_CELERY_RESULT_BACKEND="db+postgresql://user:pass@localhost:5432/db"
+```
+
 ## Configuration
 
 ### Environment Variables
