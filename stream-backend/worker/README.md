@@ -14,6 +14,16 @@ $env:STREAM_BACKEND_CELERY_BROKER_URL = "amqp://guest:guest@localhost:5672//"
 $env:STREAM_BACKEND_CELERY_QUEUE = "deep-research-runs"
 ```
 
+> **`STREAM_BACKEND_RUNNER_BACKEND` must be exactly `celery`** to schedule runs on
+> the worker. It selects the *execution engine*, not the transport — any other
+> value (including `rabbitmq`, which is an event-broker name) runs the agent
+> **in-process** in the API. On startup the API logs the resolved backend, e.g.
+> `service.init ... execution=celery-worker` vs `execution=in-process-asyncio`
+> with a `reason=...`; if a run is not enqueued, it logs
+> `service.run.not_scheduled_to_worker ... reason=...`. If you set it to celery
+> but see `service.celery_scheduler.init_failed`, the worker client/broker could
+> not be initialized.
+
 Use the same durable store and event broker settings for both the API and the
 worker:
 

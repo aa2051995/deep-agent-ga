@@ -126,8 +126,8 @@ def set_env():
     os.environ.setdefault("RESEARCH_AGENT_MODEL", "moonshotai.kimi-k2.5")
     os.environ.setdefault("AWS_REGION", "eu-north-1")
     os.environ.setdefault("AWS_BEDROCK_PROFILE", "my-profile")
-    # os.environ.setdefault("STREAM_BACKEND_RUNNER_BACKEND", "")
-    # os.environ.setdefault("STREAM_BACKEND_CELERY_BROKER_URL", "amqp://guest:guest@localhost:5672//")
+    os.environ.setdefault("STREAM_BACKEND_RUNNER_BACKEND", "celery")  # "celery" schedules on the worker; "asyncio" runs in-process
+    os.environ.setdefault("STREAM_BACKEND_CELERY_BROKER_URL", "amqp://guest:guest@localhost:5672//")
     os.environ.setdefault("TAVILY_API_KEY", "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")
     os.environ.setdefault("GOOGLE_API_KEY", "AIzaSyBx0JdmhyXdoufg23j2Ec69ej968-LSymU")  # --- IGNORE ---
     os.environ.setdefault("STREAM_BACKEND_EVENT_BROKER", "rabbitmq")

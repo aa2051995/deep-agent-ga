@@ -23,6 +23,9 @@ if TYPE_CHECKING:
 
 
 ACTIVE_RUN_STATUSES = {"pending", "running"}
+# Runner backends that select how a run executes. Only "celery" schedules onto a
+# worker; anything else (or an unrecognized value) runs in-process via asyncio.
+RECOGNIZED_RUNNER_BACKENDS = {"asyncio", "celery"}
 logger = logging.getLogger("stream_backend.service")
 
 
@@ -80,17 +83,50 @@ class ProtocolService:
             self.runner = AutoResearchRunner(repo, strict=True)
         else:
             self.runner = AutoResearchRunner(repo)
-        self.runner_backend = (
+        raw_backend = (
             os.getenv("STREAM_BACKEND_RUNNER_BACKEND")
             or os.getenv("STREAM_BACKEND_EXECUTION_BACKEND")
             or "asyncio"
         ).lower()
-        self.run_scheduler = run_scheduler
-        if self.run_scheduler is None and self.runner_backend == "celery":
-            from worker.client import CeleryRunScheduler
+        self.runner_backend = raw_backend
+        # Explains, for observability, why a run is (not) scheduled onto a worker.
+        self._scheduler_unavailable_reason: str | None = None
 
-            self.run_scheduler = CeleryRunScheduler()
-        if self.runner_backend == "celery":
+        if raw_backend not in RECOGNIZED_RUNNER_BACKENDS:
+            logger.warning(
+                "service.runner_backend.unrecognized value=%r recognized=%s -> running in-process; "
+                "set STREAM_BACKEND_RUNNER_BACKEND=celery to schedule runs on a Celery worker",
+                raw_backend,
+                sorted(RECOGNIZED_RUNNER_BACKENDS),
+            )
+
+        self.run_scheduler = run_scheduler
+        if self.run_scheduler is not None:
+            pass  # explicitly injected (e.g. tests) — use as-is
+        elif raw_backend == "celery":
+            try:
+                from worker.client import CeleryRunScheduler
+
+                self.run_scheduler = CeleryRunScheduler()
+                logger.info(
+                    "service.celery_scheduler.enabled queue=%s broker=%s",
+                    os.getenv("STREAM_BACKEND_CELERY_QUEUE", "celery"),
+                    os.getenv("STREAM_BACKEND_CELERY_BROKER_URL", "<default>"),
+                )
+            except Exception as exc:
+                self._scheduler_unavailable_reason = f"celery scheduler init failed: {exc}"
+                logger.exception(
+                    "service.celery_scheduler.init_failed -> falling back to in-process asyncio"
+                )
+        elif raw_backend == "asyncio":
+            self._scheduler_unavailable_reason = "runner_backend=asyncio (runs execute in-process by design)"
+        else:
+            self._scheduler_unavailable_reason = (
+                f"runner_backend={raw_backend!r} is not 'celery' "
+                "(set STREAM_BACKEND_RUNNER_BACKEND=celery to schedule on the worker)"
+            )
+
+        if self.run_scheduler is not None:
             store = os.getenv("STREAM_BACKEND_STORE", "memory").lower()
             broker = os.getenv("STREAM_BACKEND_EVENT_BROKER", "memory").lower()
             if store != "postgres" or broker != "rabbitmq":
@@ -103,7 +139,14 @@ class ProtocolService:
         self.tasks: set[asyncio.Task[None]] = set()
         self.run_tasks: dict[tuple[str, str], asyncio.Task[None]] = {}
         self.thread_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
-        logger.info("service.init mode=%s runner_backend=%s", mode, self.runner_backend)
+        logger.info(
+            "service.init mode=%s runner_backend=%s execution=%s scheduler=%s%s",
+            mode,
+            self.runner_backend,
+            "celery-worker" if self.run_scheduler is not None else "in-process-asyncio",
+            type(self.run_scheduler).__name__ if self.run_scheduler is not None else None,
+            "" if self.run_scheduler is not None else f" reason={self._scheduler_unavailable_reason!r}",
+        )
 
     def _track_task(self, run: RunRecord, task: asyncio.Task[None]) -> None:
         self.tasks.add(task)
@@ -113,7 +156,17 @@ class ProtocolService:
 
     async def start_run_task(self, run: RunRecord, input_value: Any) -> bool:
         if self.run_scheduler is not None:
-            task_id = self.run_scheduler.enqueue_run(run.model_dump(mode="json"), input_value)
+            try:
+                task_id = self.run_scheduler.enqueue_run(run.model_dump(mode="json"), input_value)
+            except Exception:
+                logger.exception(
+                    "service.run.schedule_failed thread_id=%s run_id=%s runner_backend=%s "
+                    "-> could not enqueue to worker (is the Celery broker reachable?)",
+                    run.thread_id,
+                    run.run_id,
+                    self.runner_backend,
+                )
+                raise
             run.metadata = {
                 **run.metadata,
                 "worker_backend": "celery",
@@ -122,12 +175,21 @@ class ProtocolService:
             }
             await self.repo.save_run(run)
             logger.info(
-                "service.celery_task_scheduled thread_id=%s run_id=%s task_id=%s",
+                "service.run.scheduled_to_worker thread_id=%s run_id=%s task_id=%s queue=%s",
                 run.thread_id,
                 run.run_id,
                 task_id,
+                os.getenv("STREAM_BACKEND_CELERY_QUEUE", "celery"),
             )
             return True
+        logger.warning(
+            "service.run.not_scheduled_to_worker thread_id=%s run_id=%s runner_backend=%s reason=%s "
+            "-> executing in-process (asyncio)",
+            run.thread_id,
+            run.run_id,
+            self.runner_backend,
+            self._scheduler_unavailable_reason,
+        )
         task = self.run_tasks.get((run.thread_id, run.run_id))
         if task is not None and not task.done():
             logger.info(

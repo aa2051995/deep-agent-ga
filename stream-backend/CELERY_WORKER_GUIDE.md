@@ -138,6 +138,29 @@ touch stream-backend/worker/__init__.py
 **Cause:** Windows default event loop incompatible with psycopg
 **Fix:** Already fixed in code (WindowsSelectorEventLoopPolicy)
 
+### 5. Runs never reach the worker (they run in-process)
+
+**Symptom:** The worker is up and listening, but tasks are never enqueued; runs
+execute inside the API process instead.
+
+**Cause:** `STREAM_BACKEND_RUNNER_BACKEND` is not exactly `celery`. It selects the
+execution engine — any other value (including an event-broker name like
+`rabbitmq`) falls back to in-process `asyncio`.
+
+**Diagnose from the API logs** (added for exactly this case):
+- Startup: `service.init ... execution=in-process-asyncio scheduler=None reason=...`
+  (vs `execution=celery-worker` when correct).
+- Unrecognized value: `service.runner_backend.unrecognized value='rabbitmq' ...`.
+- Per run: `service.run.not_scheduled_to_worker ... reason=...` vs
+  `service.run.scheduled_to_worker ... task_id=... queue=...`.
+- Scheduler init failure (celery selected but client/broker unavailable):
+  `service.celery_scheduler.init_failed`.
+
+**Fix:**
+```bash
+export STREAM_BACKEND_RUNNER_BACKEND=celery
+```
+
 ## Configuration
 
 ### Environment Variables
