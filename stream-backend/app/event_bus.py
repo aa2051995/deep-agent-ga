@@ -14,6 +14,27 @@ from .store import Repository
 
 logger = logging.getLogger("stream_backend.event_bus")
 
+# RabbitMQ Streams closes the producer connection ("frame too large") if a single
+# published message exceeds the negotiated frame size. Agent tool outputs can be
+# huge (e.g. a downloaded document), so every event body is bounded well under the
+# limit: oversized string fields are truncated first, and the whole payload is
+# replaced as a last resort, so one big output can never break the event bus.
+MAX_EVENT_STRING_CHARS = 24_000
+MAX_EVENT_BODY_BYTES = 256 * 1024
+
+
+def truncate_oversized_strings(value: Any, max_chars: int = MAX_EVENT_STRING_CHARS) -> Any:
+    """Recursively cap any string field so serialized events stay small."""
+    if isinstance(value, str):
+        if len(value) > max_chars:
+            return value[:max_chars] + f"... [truncated {len(value) - max_chars} chars]"
+        return value
+    if isinstance(value, dict):
+        return {key: truncate_oversized_strings(item, max_chars) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [truncate_oversized_strings(item, max_chars) for item in value]
+    return value
+
 
 class EventSubscription(Protocol):
     stream_name: str
@@ -227,15 +248,10 @@ class RabbitMQStreamBroker:
         self._declared: set[str] = set()
         self._lock = asyncio.Lock()
 
-    async def setup(self) -> None:
-        try:
-            from rstream import Producer
-        except Exception as exc:  # pragma: no cover - depends on optional dependency
-            raise RuntimeError(
-                "Install rstream to use STREAM_BACKEND_EVENT_BROKER=rabbitmq."
-            ) from exc
+    def _new_producer(self) -> Any:
+        from rstream import Producer
 
-        self._producer = Producer(
+        return Producer(
             host=self.settings.host,
             port=self.settings.port,
             username=self.settings.username,
@@ -243,7 +259,51 @@ class RabbitMQStreamBroker:
             vhost=self.settings.vhost,
             connection_name="langgraphjs-stream-backend-producer",
         )
-        await self._producer.start()
+
+    async def _ensure_producer(self) -> Any:
+        """Return a live producer, (re)connecting if one has never been started
+        or was torn down after a connection failure."""
+        if self._producer is not None:
+            return self._producer
+        async with self._lock:
+            if self._producer is not None:
+                return self._producer
+            producer = self._new_producer()
+            await producer.start()
+            self._producer = producer
+            # Streams are declared per producer connection; force re-declaration.
+            self._declared.clear()
+            logger.info(
+                "event_broker.rabbitmq.producer_ready host=%s port=%s vhost=%s prefix=%s",
+                self.settings.host,
+                self.settings.port,
+                self.settings.vhost,
+                self.prefix,
+            )
+            return self._producer
+
+    async def _reset_producer(self, failed: Any) -> None:
+        """Drop a producer whose connection failed so the next publish reconnects."""
+        async with self._lock:
+            if self._producer is not failed:
+                return  # already replaced by a concurrent reconnect
+            self._producer = None
+            self._declared.clear()
+        try:
+            if failed is not None:
+                await failed.close()
+        except Exception:
+            logger.debug("event_broker.rabbitmq.failed_producer_close_failed", exc_info=True)
+
+    async def setup(self) -> None:
+        try:
+            from rstream import Producer  # noqa: F401 - import guard for a clear error
+        except Exception as exc:  # pragma: no cover - depends on optional dependency
+            raise RuntimeError(
+                "Install rstream to use STREAM_BACKEND_EVENT_BROKER=rabbitmq."
+            ) from exc
+
+        await self._ensure_producer()
         logger.info(
             "event_broker.rabbitmq.ready host=%s port=%s vhost=%s prefix=%s",
             self.settings.host,
@@ -361,16 +421,43 @@ class RabbitMQStreamBroker:
         namespace: list[str] | None = None,
         node: str | None = None,
     ) -> bytes:
-        payload = {
-            "method": method,
-            "params": {
-                "namespace": namespace or [],
-                "timestamp": now_ms(),
-                "data": data,
-                "node": node,
-            },
-        }
-        return json.dumps(payload, separators=(",", ":"), default=str).encode("utf-8")
+        def encode(payload_data: object) -> bytes:
+            payload = {
+                "method": method,
+                "params": {
+                    "namespace": namespace or [],
+                    "timestamp": now_ms(),
+                    "data": payload_data,
+                    "node": node,
+                },
+            }
+            return json.dumps(payload, separators=(",", ":"), default=str).encode("utf-8")
+
+        body = encode(data)
+        if len(body) <= MAX_EVENT_BODY_BYTES:
+            return body
+
+        # Oversized (e.g. a tool returned a whole downloaded document): truncate
+        # string fields, then fall back to a small placeholder, so the frame can
+        # never exceed the broker's limit and close the connection.
+        original_bytes = len(body)
+        body = encode(truncate_oversized_strings(data))
+        if len(body) > MAX_EVENT_BODY_BYTES:
+            body = encode(
+                {
+                    "truncated": True,
+                    "reason": "event_too_large",
+                    "method": method,
+                    "original_bytes": original_bytes,
+                }
+            )
+        logger.warning(
+            "event_broker.rabbitmq.payload_truncated method=%s original_bytes=%s final_bytes=%s",
+            method,
+            original_bytes,
+            len(body),
+        )
+        return body
 
     def _event_from_message_body(self, body: bytes, offset: int) -> ProtocolEvent:
         payload = json.loads(body)
@@ -392,6 +479,16 @@ class RabbitMQStreamBroker:
             params=EventParams.model_validate(params),
         )
 
+    def _build_message(self, body: bytes, thread_id: str, method: str) -> Any:
+        try:
+            from rstream import AMQPMessage
+        except Exception as exc:  # pragma: no cover - depends on optional dependency
+            raise RuntimeError("rstream is required for RabbitMQ publishing.") from exc
+        return AMQPMessage(
+            body=body,
+            application_properties={"thread_id": thread_id, "method": method},
+        )
+
     async def append_event(
         self,
         thread_id: str,
@@ -400,31 +497,34 @@ class RabbitMQStreamBroker:
         namespace: list[str] | None = None,
         node: str | None = None,
     ) -> ProtocolEvent:
-        if self._producer is None:
-            print("RabbitMQStreamBroker.setup() was not called.")
-            raise RuntimeError("RabbitMQStreamBroker.setup() was not called.")
-        try:
-            from rstream import AMQPMessage
-        except Exception as exc:  # pragma: no cover - depends on optional dependency
-            print("rstream is required for RabbitMQ publishing.")
-            raise RuntimeError("rstream is required for RabbitMQ publishing.") from exc
-        # print(f"Appending event to RabbitMQ stream: thread_id={thread_id} method={method} namespace={namespace} node={node}")
-        stream_name = await self._ensure_stream(thread_id)
         body = self._payload_bytes(method, data, namespace, node)
-        message = AMQPMessage(
-            body=body,
-            application_properties={
-                "thread_id": thread_id,
-                "method": method,
-            },
-        )
-        await self._producer.send_wait(stream_name, message)
-        return ProtocolEvent(
-            event_id="-1",
-            seq=-1,
-            method=method,
-            params=EventParams(namespace=namespace or [], data=data, node=node),
-        )
+        last_exc: Exception | None = None
+        # One retry with a fresh producer: if the connection was torn down (e.g.
+        # by an earlier oversized frame), reconnect instead of failing forever.
+        for attempt in range(2):
+            producer = await self._ensure_producer()
+            try:
+                stream_name = await self._ensure_stream(thread_id)
+                message = self._build_message(body, thread_id, method)
+                await producer.send_wait(stream_name, message)
+                return ProtocolEvent(
+                    event_id="-1",
+                    seq=-1,
+                    method=method,
+                    params=EventParams(namespace=namespace or [], data=data, node=node),
+                )
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(
+                    "event_broker.rabbitmq.send_failed thread_id=%s method=%s attempt=%s error=%s",
+                    thread_id,
+                    method,
+                    attempt,
+                    exc,
+                )
+                await self._reset_producer(producer)
+        assert last_exc is not None
+        raise last_exc
 
     async def list_events(self, thread_id: str, since: int | None = None) -> list[ProtocolEvent]:
         subscription = await self.subscribe(thread_id, since)
@@ -570,15 +670,18 @@ class PublishingRepository:
         node: str | None = None,
     ) -> ProtocolEvent:
         event = await self.inner.append_event(thread_id, method, data, namespace, node)
-        # logger.info(
-        #     "event.publish.persisted thread_id=%s seq=%s method=%s namespace=%s node=%s",
-        #     thread_id,
-        #     event.seq,
-        #     method,
-        #     namespace or [],
-        #     node,
-        # )
-        await self.broker.append_event(thread_id, method, data, namespace, node)
+        # Publishing is best-effort: the event is already durably persisted, so a
+        # transient broker failure must not fail the run. Live subscribers can
+        # replay missed events from the store on reconnect.
+        try:
+            await self.broker.append_event(thread_id, method, data, namespace, node)
+        except Exception:
+            logger.warning(
+                "event.publish.broker_failed thread_id=%s method=%s (event persisted; live stream may lag)",
+                thread_id,
+                method,
+                exc_info=True,
+            )
         return event
 
     async def list_events(self, thread_id: str, since: int | None = None) -> list[ProtocolEvent]:

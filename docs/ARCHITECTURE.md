@@ -92,6 +92,7 @@ Two distinct broker roles:
 1. **Event bus (streaming fan-out)** — `STREAM_BACKEND_EVENT_BROKER`:
    - `memory` — `InMemoryEventBroker` (single-process only).
    - `rabbitmq` — `RabbitMQStreamBroker` using the **RabbitMQ Streams protocol** (`rstream`, port 5552). One durable stream per thread (`langgraphjs.stream.thread.<id>.events`), with `max-age` retention (default 12h) and offset-based replay/resume. This is what lets a Celery worker's events reach an SSE client connected to the API process.
+     - **Frame-size guard**: a single published message larger than RabbitMQ's negotiated frame closes the producer connection (`frame too large`), which would otherwise brick streaming for every thread. Every event body is bounded under `MAX_EVENT_BODY_BYTES` (256 KiB) — oversized string fields (e.g. a tool that returns a downloaded document) are truncated, with a compact placeholder as a last resort. The producer also reconnects on send failure, and `PublishingRepository` treats publishing as best-effort (the event is already persisted), so a broker hiccup degrades live streaming instead of failing the run.
 
 2. **Celery broker (task queue)** — `STREAM_BACKEND_CELERY_BROKER_URL`, default **AMQP** (`amqp://guest:guest@localhost:5672//`, classic RabbitMQ port). Uses quorum queues, topic exchange, persistent delivery, late acks, prefetch=1, JSON serialization.
 
