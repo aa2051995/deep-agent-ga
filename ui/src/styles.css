@@ -262,6 +262,26 @@ button {
   padding: 28px clamp(18px, 6vw, 92px);
 }
 
+.load-earlier-runs {
+  display: flex;
+  justify-content: center;
+}
+
+.load-earlier-runs-button {
+  border: 1px solid #d5dbe6;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #475467;
+  font-size: 13px;
+  padding: 6px 16px;
+  cursor: pointer;
+}
+
+.load-earlier-runs-button:hover {
+  background: #f2f4f7;
+  color: #293241;
+}
+
 .empty-state {
   display: grid;
   place-content: center;

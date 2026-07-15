@@ -19,6 +19,7 @@ import { deleteThread, getRunCheckpointSnapshot, listRuns, listThreads, renameTh
 import { DEFAULT_API_URL, messageText, useDeepResearchStream } from "./stream";
 import type { DebugEvent, DeepResearchStream } from "./stream";
 import { selectInputRequests, subagentStreamToCard } from "./selectors";
+import { hasEarlierUnhydratedRuns, selectRunsToHydrate } from "./runHydration";
 import type { InputRequest, ProtocolEvent, RunCheckpointSnapshot, RunSummary, SubagentCard, ThreadSummary } from "./types";
 
 const CURRENT_THREAD_KEY = "deep-research-ui:current-thread";
@@ -65,6 +66,10 @@ const TERMINAL_EVENT_TO_RUN_STATUS: Record<string, string> = {
   timeout: "timeout",
 };
 const PERSISTED_RUN_STATUSES = new Set(["success", "error", "interrupted", "timeout"]);
+// Lazy hydration: how many of the newest finished runs to load checkpoint
+// snapshots for on open, and how many more to reveal per "Load earlier runs".
+const INITIAL_HYDRATED_RUN_LIMIT = 3;
+const EARLIER_RUNS_BATCH = 5;
 
 function threadIdFromUrl(): string | null {
   const params = new URLSearchParams(window.location.search);
@@ -572,6 +577,7 @@ export function App() {
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const [runCheckpointSnapshots, setRunCheckpointSnapshots] = useState<Record<string, RunCheckpointSnapshot>>({});
+  const [hydratedRunLimit, setHydratedRunLimit] = useState(INITIAL_HYDRATED_RUN_LIMIT);
   const joinedRunIds = useRef(new Set<string>());
   const joinRunStreamRef = useRef<((run: ActiveRun) => Promise<void>) | null>(null);
   const activeRunRef = useRef<ActiveRun | null>(null);
@@ -863,6 +869,7 @@ export function App() {
     setRuns([]);
     setCurrentRunId(null);
     setRunCheckpointSnapshots({});
+    setHydratedRunLimit(INITIAL_HYDRATED_RUN_LIMIT);
     loggedMessageTextRef.current.clear();
     stream.clearDebugEvents();
     joinedRunIds.current.clear();
@@ -1243,70 +1250,69 @@ export function App() {
     }
     const requestThreadId = threadId;
     const requestSeq = threadRequestSeqRef.current;
-    const missingRuns = runs.filter(
-      (run) =>
-        run.threadId === requestThreadId &&
-        PERSISTED_RUN_STATUSES.has(run.status) &&
-        !runCheckpointSnapshots[run.runId],
+    // Lazy hydration: only fetch snapshots for the newest window of finished
+    // runs (plus the run being viewed), not every finished run on the thread.
+    const missingRuns = selectRunsToHydrate(
+      runsInMessageOrder,
+      runCheckpointSnapshots,
+      hydratedRunLimit,
+      PERSISTED_RUN_STATUSES,
+      currentRunId,
     );
     if (missingRuns.length === 0) {
       return undefined;
     }
     let cancelled = false;
     const controller = new AbortController();
-    void Promise.all(
-      missingRuns.map((run) =>
-        getRunCheckpointSnapshot(apiUrl, run.threadId, run.runId, controller.signal),
-      ),
-    )
-      .then((snapshots) => {
-        if (
-          cancelled ||
-          controller.signal.aborted ||
-          threadIdRef.current !== requestThreadId ||
-          requestSeq !== threadRequestSeqRef.current
-        ) {
-          logger.info("runs.checkpoints.load.ignored.staleThread", {
-            requestThreadId,
-            currentThreadId: threadIdRef.current,
-            requestSeq,
-            currentSeq: threadRequestSeqRef.current,
-            count: missingRuns.length,
-          });
-          return;
-        }
-        const currentThreadSnapshots = snapshots.filter((snapshot) => snapshot.run.threadId === requestThreadId);
-        setRunCheckpointSnapshots((current) => ({
-          ...current,
-          ...Object.fromEntries(currentThreadSnapshots.map((snapshot) => [snapshot.run.runId, snapshot])),
-        }));
-      })
-      .catch((caught) => {
-        if (
-          cancelled ||
-          controller.signal.aborted ||
-          (caught instanceof DOMException && caught.name === "AbortError")
-        ) {
-          logger.debug("runs.checkpoints.load.aborted", {
+    const isStale = (): boolean =>
+      cancelled ||
+      controller.signal.aborted ||
+      threadIdRef.current !== requestThreadId ||
+      requestSeq !== threadRequestSeqRef.current;
+
+    logger.info("runs.checkpoints.load.start", {
+      threadId: requestThreadId,
+      count: missingRuns.length,
+      hydratedRunLimit,
+    });
+
+    // Fetch each run independently and apply as it resolves, so one slow or
+    // failing run never blocks hydration of the others (unlike Promise.all).
+    void Promise.allSettled(
+      missingRuns.map(async (run) => {
+        try {
+          const snapshot = await getRunCheckpointSnapshot(apiUrl, run.threadId, run.runId, controller.signal);
+          if (isStale() || snapshot.run.threadId !== requestThreadId) {
+            return;
+          }
+          setRunCheckpointSnapshots((current) =>
+            current[run.runId] ? current : { ...current, [run.runId]: snapshot },
+          );
+        } catch (caught) {
+          if (
+            cancelled ||
+            controller.signal.aborted ||
+            (caught instanceof DOMException && caught.name === "AbortError")
+          ) {
+            logger.debug("runs.checkpoints.load.aborted", { threadId: requestThreadId, runId: run.runId });
+            return;
+          }
+          logger.error("runs.checkpoints.load.failed", {
             threadId: requestThreadId,
-            count: missingRuns.length,
+            runId: run.runId,
+            message: caught instanceof Error ? caught.message : String(caught),
           });
-          return;
+          if (threadIdRef.current === requestThreadId && requestSeq === threadRequestSeqRef.current) {
+            setError(caught instanceof Error ? caught.message : "Unable to load run checkpoints.");
+          }
         }
-        logger.error("runs.checkpoints.load.failed", {
-          threadId: requestThreadId,
-          count: missingRuns.length,
-          message: caught instanceof Error ? caught.message : String(caught),
-        });
-        if (threadIdRef.current === requestThreadId && requestSeq === threadRequestSeqRef.current) {
-          setError(caught instanceof Error ? caught.message : "Unable to load run checkpoints.");
-        }
-      });
+      }),
+    );
     return () => {
       cancelled = true;
       controller.abort();
     };
-  }, [apiUrl, runCheckpointSnapshots, runs, threadId]);
+  }, [apiUrl, currentRunId, hydratedRunLimit, runCheckpointSnapshots, runs, runsInMessageOrder, threadId]);
 
   useEffect(() => {
     const handlePopState = (): void => {
@@ -1320,6 +1326,7 @@ export function App() {
       setRuns([]);
       setCurrentRunId(null);
       setRunCheckpointSnapshots({});
+      setHydratedRunLimit(INITIAL_HYDRATED_RUN_LIMIT);
       stream.clearDebugEvents();
       joinedRunIds.current.clear();
       switchThreadRef.current?.(nextThreadId);
@@ -1666,6 +1673,18 @@ export function App() {
               shouldStickToBottomRef.current = isNearBottom(event.currentTarget);
             }}
           >
+            {displayedMessageEntries.length > 0 &&
+              hasEarlierUnhydratedRuns(runsInMessageOrder, PERSISTED_RUN_STATUSES, hydratedRunLimit) && (
+                <div className="load-earlier-runs">
+                  <button
+                    type="button"
+                    className="load-earlier-runs-button"
+                    onClick={() => setHydratedRunLimit((limit) => limit + EARLIER_RUNS_BATCH)}
+                  >
+                    Load earlier runs
+                  </button>
+                </div>
+              )}
             {displayedMessageEntries.length === 0 ? (
               <div className="empty-state">
                 <h1>What should we research?</h1>

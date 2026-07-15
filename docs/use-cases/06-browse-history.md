@@ -15,6 +15,7 @@ Let a user review past research: list their threads, open a thread to see its ru
 
 1. **Thread list**: UI calls `POST /threads/search {limit, offset}` → `list_threads` (ordered `updated_at DESC`). UI derives a title from `metadata.title` or the first human message (`threadTitle`).
 2. **Open thread**: UI calls `GET /threads/{id}/runs?limit=100` → `list_runs`; optionally `GET /threads/{id}/state` for the latest values.
+   - **Lazy hydration (UI, E10)**: the UI does **not** fetch every finished run's checkpoints. `selectRunsToHydrate` (`ui/src/runHydration.ts`) picks only the newest `hydratedRunLimit` finished runs (default 3) plus the run currently being viewed, and requests those snapshots via `Promise.allSettled` (one slow/failing run never blocks the others). A **"Load earlier runs"** control raises `hydratedRunLimit` to reveal older runs on demand. Un-hydrated older runs simply contribute no messages to the transcript until requested.
 3. **Run detail**: UI calls `GET /threads/{id}/runs/{run_id}/checkpoints` → `get_run_checkpoints`:
    - `get_run`, then `get_run_snapshot(id, run_id)`.
    - **Fast path** — a finished run has a pre-projected `RunSnapshot` in `stream_run_snapshots`; the endpoint returns it directly (`from_snapshot: true`) with a single keyed lookup, no history scan.
@@ -71,6 +72,7 @@ sequenceDiagram
 ## Related Code
 
 - `ui/src/api.ts` → `listThreads`, `listRuns`, `getRunCheckpointSnapshot` (reads `fromSnapshot`), `threadTitle`
+- `ui/src/runHydration.ts` → `selectRunsToHydrate`, `hasEarlierUnhydratedRuns` (lazy-window snapshot hydration, unit-tested in `runHydration.test.ts`)
 - `stream-backend/app/main.py` → `search_threads`, `list_runs`, `get_run_checkpoints` (snapshot fast path + fallback), `get_thread_history`, `get_thread_state`
 - `stream-backend/app/projections.py` → `project_run_checkpoints`, `project_subagents`, `previous_message_count_for_run`, `build_run_snapshot`
 - `stream-backend/app/research_runtime.py` / `deep_agent.py` → `_persist_run_snapshot` (writes the snapshot on run completion)

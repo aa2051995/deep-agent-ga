@@ -15,7 +15,7 @@ Every effect in `App`, numbered E1–E16 in source order. **E3 is a `useLayoutEf
 | E7 | Normalize localStorage thread into the URL | `[]` | Mount only | `window.history` (URL) | No | No |
 | E8 | Load thread list on startup / API change | `apiUrl` | Mount + `apiUrl` change | `threads, threadsLoading, error` | **Yes** (`listThreads`) | Yes |
 | E9 | Load runs for the current thread | `apiUrl, threadId` | Mount + api/thread change | `runs` | **Yes** (`listRuns`) | Yes |
-| E10 | Fetch checkpoint snapshots for finished runs missing them | `apiUrl, runCheckpointSnapshots, runs, threadId` | When runs/snapshots/thread change | `runCheckpointSnapshots, error` | **Yes** (`getRunCheckpointSnapshot` ×N) | Yes |
+| E10 | **Lazily** hydrate checkpoint snapshots — only the newest `hydratedRunLimit` finished runs (plus the current run), not every finished run | `apiUrl, currentRunId, hydratedRunLimit, runCheckpointSnapshots, runs, runsInMessageOrder, threadId` | When runs/snapshots/thread/limit/current-run change | `runCheckpointSnapshots, error` | **Yes** (`getRunCheckpointSnapshot` ×N_window, `Promise.allSettled`) | Yes |
 | E11 | Handle browser back/forward (popstate) | `[]` | Mount (listener); fires on navigation | `activeRun, visibleMessages, optimisticMessages, runs, currentRunId, runCheckpointSnapshots, threadId` + refs | No | Yes (bulk reset) |
 | E12 | **Dead** (empty body) | `activeRun, apiUrl` | On change (no-op) | Nothing | No | No |
 | E13 | Clear `currentRunId` once its run is finished | `currentRunId, currentRunSnapshotLoaded, currentRunStatus, stream.isLoading, threadId` | On run status/snapshot/loading change | `currentRunId` (→ null) | No | Yes |
@@ -36,7 +36,7 @@ Every effect in `App`, numbered E1–E16 in source order. **E3 is a `useLayoutEf
 | E7 | None | None (runs once). |
 | E8 | None | **Yes** — `apiUrl` change while a `listThreads` is in flight; guarded by a local `cancelled` flag so stale responses are dropped. |
 | E9 | None | **Yes** — thread switch mid-fetch; guarded by `AbortController` **and** `threadRequestSeqRef` + `threadIdRef` checks inside `refreshRuns`. |
-| E10 | **Self-limiting loop** — depends on `runCheckpointSnapshots` and also writes it; converges because it only fetches runs *missing* a snapshot, so `missingRuns` empties and it early-returns. | **Yes** — batch of N fetches across a thread switch; guarded by `cancelled`, `AbortController`, seq + `threadIdRef` re-checks before `setRunCheckpointSnapshots`. |
+| E10 | **Self-limiting loop** — depends on `runCheckpointSnapshots` and also writes it; converges because it only fetches runs *missing* a snapshot within the lazy window (via `selectRunsToHydrate`), so the target set empties and it early-returns. Raising `hydratedRunLimit` ("Load earlier runs") re-runs it for the newly-revealed older runs. | **Yes** — N_window independent fetches across a thread switch; each fetch settles on its own (`Promise.allSettled`) so one failure no longer drops the batch, and each is guarded by `cancelled`, `AbortController`, seq + `threadIdRef` re-checks before `setRunCheckpointSnapshots`. |
 | E11 | None | Triggers E9/E10 for the new thread; those are individually guarded. Bumps `threadRequestSeqRef` to invalidate older in-flight work. |
 | E12 | None | None (dead). |
 | E13 | **Self-referential but convergent** — clearing `currentRunId` re-runs the effect, but the `if (!currentRunId …) return` guard stops further action. | Waits for `currentRunSnapshotLoaded` before clearing a persisted run, so the transcript never blanks before persisted data arrives. |
