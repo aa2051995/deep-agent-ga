@@ -64,13 +64,33 @@ def test_payload_bytes_caps_oversized_output_below_frame_limit() -> None:
 def test_payload_bytes_placeholder_when_still_too_large() -> None:
     broker = _broker()
     # Many oversized strings: even after per-string truncation the body would be
-    # too big, so the payload is replaced by a compact placeholder.
+    # too big, so the payload is compacted (big fields dropped, scalars kept).
     huge = {f"k{i}": "B" * 50_000 for i in range(200)}
     body = broker._payload_bytes("updates", huge)
     assert len(body) <= MAX_EVENT_BODY_BYTES
     payload = json.loads(body)
-    assert payload["params"]["data"]["truncated"] is True
-    assert payload["params"]["data"]["reason"] == "event_too_large"
+    assert payload["params"]["data"]["_truncated"] is True
+    assert payload["params"]["data"]["_truncated_reason"] == "event_too_large"
+
+
+def test_payload_bytes_compaction_keeps_tool_event_discriminator() -> None:
+    broker = _broker()
+    # A tools event with a giant output must still keep `event`/ids so the SDK
+    # doesn't throw "Unexpected tool event: undefined".
+    huge_tool = {
+        "event": "tool-finished",
+        "tool_call_id": "call-1",
+        "tool_name": "tavily_search",
+        "run_id": "r1",
+        "output": [{"content": "X" * 200_000} for _ in range(50)],
+    }
+    body = broker._payload_bytes("tools", huge_tool)
+    assert len(body) <= MAX_EVENT_BODY_BYTES
+    data = json.loads(body)["params"]["data"]
+    assert data["event"] == "tool-finished"
+    assert data["tool_call_id"] == "call-1"
+    assert data["tool_name"] == "tavily_search"
+    assert data["_truncated"] is True
 
 
 @pytest.mark.asyncio

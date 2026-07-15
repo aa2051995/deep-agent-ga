@@ -36,6 +36,29 @@ def truncate_oversized_strings(value: Any, max_chars: int = MAX_EVENT_STRING_CHA
     return value
 
 
+def compact_event_data(data: Any, method: str, original_bytes: int) -> dict[str, Any]:
+    """Last-resort shrink for an event whose body is still too large after string
+    truncation. Keeps the small **scalar** fields — crucially the channel
+    discriminators a consumer needs to parse the event (e.g. a tools event's
+    ``event``: "tool-started"/"tool-finished", plus ids) — and drops only the
+    big nested payloads. Replacing the whole ``data`` (as a bare placeholder)
+    would strip ``event`` and make the LangGraph SDK throw
+    ``Unexpected tool event: undefined`` and blank the UI.
+    """
+    keep: dict[str, Any] = {}
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if value is None or isinstance(value, (bool, int, float)):
+                keep[key] = value
+            elif isinstance(value, str):
+                keep[key] = value if len(value) <= 512 else value[:512] + "... [truncated]"
+            # large lists/dicts (outputs, message content, values state) are dropped
+    keep["_truncated"] = True
+    keep["_truncated_reason"] = "event_too_large"
+    keep["_original_bytes"] = original_bytes
+    return keep
+
+
 class EventSubscription(Protocol):
     stream_name: str
 
@@ -443,14 +466,9 @@ class RabbitMQStreamBroker:
         original_bytes = len(body)
         body = encode(truncate_oversized_strings(data))
         if len(body) > MAX_EVENT_BODY_BYTES:
-            body = encode(
-                {
-                    "truncated": True,
-                    "reason": "event_too_large",
-                    "method": method,
-                    "original_bytes": original_bytes,
-                }
-            )
+            # Preserve channel discriminators (e.g. tools "event") so consumers
+            # can still parse the event; only the big nested payload is dropped.
+            body = encode(compact_event_data(data, method, original_bytes))
         logger.warning(
             "event_broker.rabbitmq.payload_truncated method=%s original_bytes=%s final_bytes=%s",
             method,

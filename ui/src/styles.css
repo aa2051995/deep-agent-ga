@@ -282,6 +282,39 @@ button {
   color: #293241;
 }
 
+.app-error-boundary {
+  max-width: 560px;
+  margin: 12vh auto;
+  padding: 32px;
+  text-align: center;
+  color: #293241;
+}
+
+.app-error-boundary-detail {
+  margin: 16px 0;
+  padding: 12px;
+  background: #f8d7da;
+  color: #842029;
+  border-radius: 8px;
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13px;
+}
+
+.app-error-boundary-button {
+  border: 1px solid #d5dbe6;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #293241;
+  padding: 8px 20px;
+  cursor: pointer;
+}
+
+.app-error-boundary-button:hover {
+  background: #f2f4f7;
+}
+
 .empty-state {
   display: grid;
   place-content: center;
