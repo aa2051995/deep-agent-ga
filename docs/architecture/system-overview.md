@@ -102,7 +102,7 @@ flowchart TB
 | `streaming.py` | `StreamSubscriptionManager` — subscribes clients to a thread's event stream, tracks `RunHandle`s, filters events (`RunStreamFilter`, `ProtocolStreamFilter`), cleans up on terminal events/disconnect. |
 | `event_bus.py` | `PublishingRepository` (persist+publish decorator); `InMemoryEventBroker` and `RabbitMQStreamBroker`; broker factory. |
 | `store.py` | `Repository` Protocol + `InMemoryRepository` (threads, runs, run snapshots, events, condition-based waits). |
-| `store_postgres.py` | `PostgresRepository` — durable `stream_threads`, `stream_runs`, `stream_run_snapshots`, `stream_events`; schema bootstrap; sequence generation. |
+| `store_postgres.py` | `PostgresRepository` — durable `stream_threads`, `stream_runs`, `stream_run_snapshots`, `stream_events`; schema bootstrap; sequence generation; `sanitize_for_jsonb` strips the NUL code point (`U+0000`) from payloads before every JSONB write (PostgreSQL cannot store NUL, which raw tool/binary content can otherwise carry). |
 | `projections.py` | Derives run-scoped views from checkpoint history (`project_run_checkpoints`); `build_run_snapshot` projects a finished run once for storage. |
 | `protocol.py` | Channel/namespace subscription matching and SSE frame serialization. |
 | `models.py` | Pydantic models: `ThreadRecord`, `RunRecord`, `RunSnapshot`, `ThreadState`, `Checkpoint`, `ProtocolCommand/Event/Success/Error`. |

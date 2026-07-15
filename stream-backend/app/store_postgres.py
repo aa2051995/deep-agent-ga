@@ -18,6 +18,27 @@ from .models import (
 from .store import empty_state
 
 
+def sanitize_for_jsonb(value: Any) -> Any:
+    """Recursively strip characters PostgreSQL's JSONB/text type cannot store.
+
+    PostgreSQL rejects the NUL code point (``\\u0000``) inside ``jsonb``/``text``
+    with ``UntranslatableCharacter``. Agent tool outputs and streamed message
+    content occasionally carry raw/binary bytes that decode to NUL, which would
+    otherwise crash every event/state write for that thread. We drop NULs from
+    all strings (including dict keys) while preserving the rest of the payload.
+    """
+    if isinstance(value, str):
+        return value.replace("\x00", "") if "\x00" in value else value
+    if isinstance(value, dict):
+        return {
+            (sanitize_for_jsonb(key) if isinstance(key, str) else key): sanitize_for_jsonb(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [sanitize_for_jsonb(item) for item in value]
+    return value
+
+
 class PostgresRepository:
     """Durable repository for thread state, run records, history, and events."""
 
@@ -131,7 +152,7 @@ class PostgresRepository:
     def _json(self, value: Any) -> Any:
         if self._jsonb is None:
             raise RuntimeError("PostgresRepository.setup() was not called.")
-        return self._jsonb(value)
+        return self._jsonb(sanitize_for_jsonb(value))
 
     async def get_thread(self, thread_id: str) -> ThreadRecord | None:
         pool = self._require_pool()

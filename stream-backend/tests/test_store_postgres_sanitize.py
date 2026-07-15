@@ -1,0 +1,48 @@
+"""Unit tests for JSONB null-byte sanitization in PostgresRepository.
+
+PostgreSQL's jsonb/text type rejects the NUL code point (\\u0000). Agent tool
+outputs / streamed content occasionally carry raw bytes that decode to NUL,
+which previously crashed every event write for the thread with
+``UntranslatableCharacter``. These tests cover the sanitizer and its wiring.
+"""
+from __future__ import annotations
+
+from app.store_postgres import PostgresRepository, sanitize_for_jsonb
+
+
+def test_strips_null_from_plain_string() -> None:
+    assert sanitize_for_jsonb("a\x00b\x00c") == "abc"
+
+
+def test_preserves_strings_without_null() -> None:
+    # Replacement chars and other control chars are valid in jsonb and kept.
+    value = "clean � text  ok"
+    assert sanitize_for_jsonb(value) is value
+
+
+def test_recurses_into_dicts_lists_and_keys() -> None:
+    payload = {
+        "content": "raw\x00bytes",
+        "nested": [{"text": "x\x00y"}, "z\x00"],
+        "ke\x00y": "v",
+    }
+    cleaned = sanitize_for_jsonb(payload)
+    assert cleaned == {
+        "content": "rawbytes",
+        "nested": [{"text": "xy"}, "z"],
+        "key": "v",
+    }
+
+
+def test_tuples_become_lists_and_scalars_pass_through() -> None:
+    assert sanitize_for_jsonb(("a\x00", 1, True, None)) == ["a", 1, True, None]
+    assert sanitize_for_jsonb(42) == 42
+
+
+def test_json_wrapper_sanitizes_before_serialization() -> None:
+    repo = PostgresRepository("postgresql://unused")
+    # Bypass setup(): _json only needs the Jsonb adapter; use identity so we can
+    # inspect the sanitized Python object it would hand to psycopg.
+    repo._jsonb = lambda value: value
+    result = repo._json({"messages": [{"content": "bad\x00data"}]})
+    assert result == {"messages": [{"content": "baddata"}]}
