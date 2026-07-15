@@ -161,6 +161,29 @@ execution engine — any other value (including an event-broker name like
 export STREAM_BACKEND_RUNNER_BACKEND=celery
 ```
 
+### 6. Windows: `ValueError: not enough values to unpack (expected 3, got 0)`
+
+**Symptom:** The task is received but the handler immediately fails:
+```
+Task handler raised error: ValueError('not enough values to unpack (expected 3, got 0)')
+  File ".../celery/app/trace.py", line 762, in fast_trace_task
+    tasks, accept, hostname = _loc
+```
+
+**Cause:** Windows has no `fork`, so Celery's prefork pool spawns child
+processes. Without `FORKED_BY_MULTIPROCESSING=1` those children skip
+worker-optimization setup, leaving Celery's `_loc` global empty.
+
+**Fix:** Already fixed in code — `worker/celery_app.py` calls
+`configure_windows_celery_env()` (sets `FORKED_BY_MULTIPROCESSING=1`) *before*
+importing celery. Just restart the worker.
+
+**Alternatives** if you still hit pool issues on Windows, run a non-prefork pool:
+```bash
+celery -A worker.celery_app worker --pool=solo --queues=deep-research-runs      # single task at a time
+celery -A worker.celery_app worker --pool=threads --concurrency=8 --queues=deep-research-runs  # concurrent, I/O-bound
+```
+
 ## Configuration
 
 ### Environment Variables

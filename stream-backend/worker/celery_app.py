@@ -1,12 +1,19 @@
 from __future__ import annotations
 
-import asyncio
 import os
 
-from celery import Celery
-from celery.signals import worker_process_init
+from worker.asyncio_policy import (
+    configure_windows_celery_env,
+    configure_windows_event_loop_policy,
+)
 
-from worker.asyncio_policy import configure_windows_event_loop_policy
+# Must run BEFORE importing celery/billiard: on Windows the spawned prefork
+# workers otherwise crash every task with "not enough values to unpack
+# (expected 3, got 0)" in fast_trace_task.
+configure_windows_celery_env()
+
+from celery import Celery  # noqa: E402
+from celery.signals import worker_process_init  # noqa: E402
 
 configure_windows_event_loop_policy()
 
