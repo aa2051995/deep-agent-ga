@@ -405,17 +405,24 @@ class PostgresRepository:
     async def get_history(self, thread_id: str, limit: int) -> list[ThreadState]:
         start = time.perf_counter()
         pool = self._require_pool()
+        # Slice the newest `limit` entries in SQL. History is stored newest-first,
+        # so ord=1 is the latest. Doing the slice server-side means we only parse
+        # `limit` states in Python instead of the whole (potentially huge) blob.
         async with pool.connection() as conn:
             row = await (
                 await conn.execute(
-                    "SELECT history FROM stream_thread_history WHERE thread_id = %s",
-                    (thread_id,),
+                    """
+                    SELECT COALESCE(jsonb_agg(elem ORDER BY ord), '[]'::jsonb)
+                    FROM stream_thread_history t
+                    CROSS JOIN LATERAL jsonb_array_elements(t.history) WITH ORDINALITY AS x(elem, ord)
+                    WHERE t.thread_id = %s AND ord <= %s
+                    """,
+                    (thread_id, max(limit, 0)),
                 )
             ).fetchone()
-        self._log_timing("get_history", start, thread_id=thread_id, found=row is not None)
-        if row is None:
-            return []
-        return [ThreadState.model_validate(item) for item in row[0][:limit]]
+        items = row[0] if row and row[0] else []
+        self._log_timing("get_history", start, thread_id=thread_id, limit=limit, entries=len(items))
+        return [ThreadState.model_validate(item) for item in items]
 
     async def create_run(self, run: RunRecord) -> RunRecord:
         await self.save_run(run)

@@ -171,7 +171,16 @@ export function useDeepResearchStream(
     onThreadId,
     messagesKey: "messages",
     reconnectOnMount: false,
-    fetchStateHistory: { limit: 20 },
+    // The persisted transcript comes from run snapshots (GET .../runs/{id}/checkpoints),
+    // NOT from thread history: `stream.messages` is only rendered for the live run
+    // and `stream.values` is never consumed. Fetching 20 states POSTed
+    // /threads/{id}/history on every load, dragging the whole (tens-of-MB) thread
+    // history off disk (~5.5 s on a large thread) for data we don't render.
+    // Keep only the CURRENT checkpoint (limit 1) so the SDK can still continue a
+    // run / surface a pending interrupt on reload. If this agent never does
+    // human-input interrupts, this can be `false` to drop the /history call
+    // entirely. (We don't use `stream.history` or branch trees.)
+    fetchStateHistory: { limit: 1 },
     subagentToolNames: ["task"],
     filterSubagentMessages: true,
     onCreated: (run: RunCallbackMeta) => {
