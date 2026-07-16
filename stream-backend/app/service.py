@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
 
 ACTIVE_RUN_STATUSES = {"pending", "running"}
+TERMINAL_RUN_STATUSES = {"success", "error", "interrupted", "timeout"}
 # Runner backends that select how a run executes. Only "celery" schedules onto a
 # worker; anything else (or an unrecognized value) runs in-process via asyncio.
 RECOGNIZED_RUNNER_BACKENDS = {"asyncio", "celery"}
@@ -154,7 +155,49 @@ class ProtocolService:
         task.add_done_callback(lambda done: self._on_task_done(run.thread_id, run.run_id, done))
         logger.info("service.task_scheduled thread_id=%s run_id=%s active_tasks=%s", run.thread_id, run.run_id, len(self.tasks))
 
+    async def _schedule_block_reason(self, run: RunRecord) -> str | None:
+        """Return why a run must NOT be (re)scheduled, or None if it may run.
+
+        Guards against double execution: a run that already completed, is already
+        enqueued/executing on a worker, or already has a live in-process task must
+        not be scheduled again.
+        """
+        latest = await self.repo.get_run(run.thread_id, run.run_id)
+        status = latest.status if latest is not None else run.status
+        metadata = latest.metadata if latest is not None else run.metadata
+
+        if status in TERMINAL_RUN_STATUSES:
+            return f"run already finished (status={status})"
+
+        task = self.run_tasks.get((run.thread_id, run.run_id))
+        if task is not None and not task.done():
+            return "run already has a live in-process (asyncio) task"
+
+        if self.run_scheduler is not None:
+            celery_task_id = metadata.get("celery_task_id")
+            if celery_task_id:
+                try:
+                    if self.run_scheduler.is_task_active(str(celery_task_id)):
+                        return f"run already enqueued/executing on worker (task_id={celery_task_id})"
+                except Exception:
+                    logger.warning(
+                        "service.run.schedule_guard.is_task_active_failed thread_id=%s run_id=%s task_id=%s",
+                        run.thread_id,
+                        run.run_id,
+                        celery_task_id,
+                    )
+        return None
+
     async def start_run_task(self, run: RunRecord, input_value: Any) -> bool:
+        block_reason = await self._schedule_block_reason(run)
+        if block_reason is not None:
+            logger.info(
+                "service.run.schedule_skipped thread_id=%s run_id=%s reason=%s",
+                run.thread_id,
+                run.run_id,
+                block_reason,
+            )
+            return False
         if self.run_scheduler is not None:
             try:
                 task_id = self.run_scheduler.enqueue_run(run.model_dump(mode="json"), input_value)
@@ -225,9 +268,19 @@ class ProtocolService:
             return False
         if self.runner_backend == "celery":
             if self.run_scheduler is None:
+                logger.warning(
+                    "service.is_run_streaming.celery_scheduler_unavailable thread_id=%s run_id=%s",
+                    thread_id,
+                    run_id,
+                )
                 return False
             celery_task_id = run.metadata.get("celery_task_id")
             if not celery_task_id:
+                logger.warning(
+                    "service.is_run_streaming.celery_task_id_missing thread_id=%s run_id=%s",
+                    thread_id,
+                    run_id,
+                )
                 return False
             try:
                 return self.run_scheduler.is_task_active(celery_task_id)

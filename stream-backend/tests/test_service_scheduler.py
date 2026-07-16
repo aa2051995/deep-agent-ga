@@ -82,3 +82,67 @@ async def test_start_run_task_schedules_to_worker(monkeypatch, caplog):
     scheduler.enqueue_run.assert_called_once()
     assert run.metadata.get("celery_task_id") == "task-123"
     assert any("scheduled_to_worker" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_start_run_task_skips_terminal_run(monkeypatch):
+    monkeypatch.setenv("STREAM_BACKEND_RUNNER_BACKEND", "celery")
+    scheduler = MagicMock()
+    repo = InMemoryRepository()
+    service = ProtocolService(repo, run_scheduler=scheduler)
+    run = RunRecord(run_id="r1", thread_id="t1", assistant_id="a1", status="success")
+    await repo.create_run(run)
+
+    assert await service.start_run_task(run, None) is False
+    scheduler.enqueue_run.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_start_run_task_skips_when_worker_task_active(monkeypatch):
+    monkeypatch.setenv("STREAM_BACKEND_RUNNER_BACKEND", "celery")
+    scheduler = MagicMock()
+    scheduler.is_task_active.return_value = True
+    repo = InMemoryRepository()
+    service = ProtocolService(repo, run_scheduler=scheduler)
+    run = RunRecord(
+        run_id="r1", thread_id="t1", assistant_id="a1", status="running",
+        metadata={"celery_task_id": "task-xyz"},
+    )
+    await repo.create_run(run)
+
+    assert await service.start_run_task(run, None) is False
+    scheduler.is_task_active.assert_called_once_with("task-xyz")
+    scheduler.enqueue_run.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_start_run_task_skips_when_asyncio_task_active(monkeypatch):
+    monkeypatch.setenv("STREAM_BACKEND_RUNNER_BACKEND", "asyncio")
+    repo = InMemoryRepository()
+    service = ProtocolService(repo)
+    run = RunRecord(run_id="r1", thread_id="t1", assistant_id="a1", status="running")
+    await repo.create_run(run)
+    live_task = MagicMock()
+    live_task.done.return_value = False
+    service.run_tasks[("t1", "r1")] = live_task
+
+    assert await service.start_run_task(run, None) is False
+
+
+@pytest.mark.asyncio
+async def test_start_run_task_is_idempotent(monkeypatch):
+    monkeypatch.setenv("STREAM_BACKEND_RUNNER_BACKEND", "celery")
+    scheduler = MagicMock()
+    scheduler.enqueue_run.return_value = "task-1"
+    scheduler.is_task_active.return_value = True  # after first enqueue it's active
+    repo = InMemoryRepository()
+    service = ProtocolService(repo, run_scheduler=scheduler)
+    run = RunRecord(run_id="r1", thread_id="t1", assistant_id="a1")
+    await repo.create_run(run)
+
+    first = await service.start_run_task(run, None)
+    second = await service.start_run_task(run, None)
+
+    assert first is True
+    assert second is False
+    scheduler.enqueue_run.assert_called_once()
