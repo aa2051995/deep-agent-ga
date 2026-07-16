@@ -20,10 +20,11 @@ if sys.platform == "win32":
 from app.deep_agent import DeepAgentDemoRunner
 from app.models import RunRecord
 from app.research_runtime import ResearchDeepAgentRunner, ResearchRuntimeUnavailable
+
 from app.runtime import create_publishing_repository
-
+from app.main import set_env
 from worker.celery_app import celery_app
-
+set_env()  # Ensure environment variables are set for the worker
 logger = logging.getLogger("stream_backend.worker.tasks")
 
 
@@ -120,7 +121,10 @@ class AutoResearchRunner:
 
 
 def runner_for_mode(repo: Any) -> Any:
-    mode = os.getenv("STREAM_BACKEND_AGENT_MODE", "auto").lower()
+    from app.agent_mode import resolve_agent_mode
+
+    mode = resolve_agent_mode()
+    logger.info("worker.runner_for_mode mode=%s", mode)
     if mode == "fixture":
         return DeepAgentDemoRunner(repo)
     if mode == "research":

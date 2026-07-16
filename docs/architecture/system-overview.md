@@ -113,7 +113,8 @@ flowchart TB
 | Module | Responsibility |
 |---|---|
 | `app/research_runtime.py` | `ResearchDeepAgentRunner` — builds the deepagents agent, runs `astream_events` (v2), mirrors LangChain events into protocol events, manages the Postgres checkpointer, resolves Bedrock model IDs, hot-reloads prompts on file mtime change, saves final state snapshots, and persists a per-run snapshot (`stream_run_snapshots`) on completion for fast retrieval. |
-| `app/deep_agent.py` | `DeepAgentDemoRunner` — deterministic scripted event stream used as a fallback and for tests. |
+| `app/deep_agent.py` | `DeepAgentDemoRunner` — the deterministic **dummy/test agent**: streams the same event shape (two subagents, messages, tool actions, todos) with **no LLM calls**. Used as the research fallback and, via `STREAM_BACKEND_TEST_AGENT`/`STREAM_BACKEND_AGENT_MODE`, as the selectable testing agent. |
+| `app/agent_mode.py` | `resolve_agent_mode()` — resolves testing vs live (`fixture`/`research`/`auto`) from `STREAM_BACKEND_TEST_AGENT` and `STREAM_BACKEND_AGENT_MODE`; shared by the API and the Celery worker. |
 | `worker/celery_app.py` | Celery app configuration (broker, quorum queues, serialization, acks). |
 | `worker/tasks.py` | `run_agent` / `resume_agent` tasks; `WorkerShutdownManager` for graceful drain; `recover_stale_runs`. |
 | `worker/client.py` | `CeleryRunScheduler` — API-side enqueue/resume/revoke and task-status checks. |

@@ -6,6 +6,7 @@ import os
 from collections import defaultdict
 from typing import Any, Protocol, TYPE_CHECKING
 
+from .agent_mode import resolve_agent_mode
 from .deep_agent import DeepAgentDemoRunner
 from .models import (
     ProtocolCommand,
@@ -77,7 +78,7 @@ class AutoResearchRunner:
 class ProtocolService:
     def __init__(self, repo: Repository, run_scheduler: RunScheduler | None = None) -> None:
         self.repo = repo
-        mode = os.getenv("STREAM_BACKEND_AGENT_MODE", "auto").lower()
+        mode = resolve_agent_mode()
         if mode == "fixture":
             self.runner = DeepAgentDemoRunner(repo)
         elif mode == "research":

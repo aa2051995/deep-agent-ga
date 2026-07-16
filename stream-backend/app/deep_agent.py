@@ -11,6 +11,17 @@ from .store import Repository
 
 logger = logging.getLogger("stream_backend.fixture")
 
+# Deterministic todos the dummy agent streams (mirrors the real agent's plan
+# panel) so the UI can be exercised without any LLM calls.
+DUMMY_TODOS_PLANNED = [
+    {"id": "todo-1", "content": "Search the web for protocol risks", "status": "in_progress"},
+    {"id": "todo-2", "content": "Inspect the sample dataset", "status": "pending"},
+]
+DUMMY_TODOS_DONE = [
+    {"id": "todo-1", "content": "Search the web for protocol risks", "status": "completed"},
+    {"id": "todo-2", "content": "Inspect the sample dataset", "status": "completed"},
+]
+
 
 def human_message(content: str, message_id: str | None = None) -> dict[str, Any]:
     return {
@@ -134,6 +145,13 @@ class DeepAgentDemoRunner:
         )
         logger.info("fixture.run.root_state_committed thread_id=%s run_id=%s step=%s", run.thread_id, run.run_id, step)
 
+        # Mirror the real agent's todo stream so the UI's plan panel is exercised.
+        await self.repo.append_event(
+            run.thread_id,
+            "updates",
+            {"todos": DUMMY_TODOS_PLANNED, "run_id": run.run_id},
+        )
+
         await self._start_task_tool(run.thread_id, "task-1", task_calls[0]["args"])
         await self._start_task_tool(run.thread_id, "task-2", task_calls[1]["args"])
 
@@ -190,10 +208,15 @@ class DeepAgentDemoRunner:
             final,
         ]
         current = (await self.repo.get_thread(run.thread_id)).state  # type: ignore[union-attr]
+        await self.repo.append_event(
+            run.thread_id,
+            "updates",
+            {"todos": DUMMY_TODOS_DONE, "run_id": run.run_id},
+        )
         await self._commit_state(
             run,
             current,
-            {"messages": root_messages},
+            {"messages": root_messages, "todos": DUMMY_TODOS_DONE},
             step + 1,
             next_nodes=[],
         )

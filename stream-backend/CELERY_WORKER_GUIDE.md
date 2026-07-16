@@ -239,6 +239,15 @@ export STREAM_BACKEND_CELERY_RESULT_BACKEND="rpc://"
 # Worker Settings
 export STREAM_BACKEND_CELERY_PREFETCH_MULTIPLIER=1
 export STREAM_BACKEND_CELERY_ACKS_LATE=true
+
+# Testing vs live agent (both API and worker honor these)
+#   Dummy agent = deterministic stream (two subagents + messages + tool actions
+#   + todos) with NO LLM calls — ideal for testing the stream/UI cheaply.
+export STREAM_BACKEND_TEST_AGENT=true            # simple on/off: truthy -> dummy agent
+# or, equivalently / for finer control:
+export STREAM_BACKEND_AGENT_MODE=testing         # testing|fixture -> dummy
+# export STREAM_BACKEND_AGENT_MODE=live          # live|research   -> real LLM (strict)
+# export STREAM_BACKEND_AGENT_MODE=auto          # real LLM, falling back to dummy (default)
 ```
 
 ### Worker Command Options
