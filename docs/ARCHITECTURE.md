@@ -104,7 +104,8 @@ The service warns if `runner_backend=celery` is used without `store=postgres` + 
 
 - **PostgreSQL** (`STREAM_BACKEND_STORE=postgres`), two independent uses of the same DB:
   1. **Application store** — `PostgresRepository` auto-creates and manages:
-     - `stream_threads` (thread_id PK; assistant_id, metadata, `state` JSONB, `history` JSONB)
+     - `stream_threads` (thread_id PK; assistant_id, metadata, `state` JSONB) — only the "hot" columns; history is split out (below).
+     - `stream_thread_history` (thread_id PK; `history` JSONB) — the append-only per-checkpoint history, which can grow to tens of MB. Kept in its own table so listing/opening threads never loads it: `list_threads` used to `SELECT history` for every thread and took **~3.4 s** on a 66 MB dataset; without history it is **~30 ms**. A one-time, idempotent migration in `setup()` moves an existing `stream_threads.history` column into this table and drops it. Read it explicitly via `get_history`; `get_thread`/`list_threads` return `history=[]`.
      - `stream_runs` (composite PK thread_id+run_id; status, metadata, kwargs, multitask_strategy, cancel_requested; index on (thread_id, created_at))
      - `stream_run_snapshots` (composite PK thread_id+run_id; status, checkpoint_id, `data` JSONB) — the pre-projected view of a finished run (messages, todos, subagents, checkpoints), written once on run completion so the run-checkpoints endpoint can serve it with a single keyed lookup instead of re-scanning the thread's checkpoint history; index on (thread_id, updated_at).
      - `stream_events` (thread_id+seq PK; `event` JSONB) — the append-only event log.

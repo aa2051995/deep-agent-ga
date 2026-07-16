@@ -7,11 +7,27 @@ which previously crashed every event write for the thread with
 """
 from __future__ import annotations
 
+import logging
+import time
+
 from app.store_postgres import PostgresRepository, sanitize_for_jsonb
 
 
 def test_strips_null_from_plain_string() -> None:
     assert sanitize_for_jsonb("a\x00b\x00c") == "abc"
+
+
+def test_log_timing_escalates_level_with_elapsed(caplog) -> None:
+    repo = PostgresRepository("postgresql://unused")  # no setup / no pool needed
+    with caplog.at_level(logging.DEBUG, logger="stream_backend.store_postgres"):
+        repo._log_timing("op_fast", time.perf_counter(), thread_id="t1")
+        repo._log_timing("op_slow", time.perf_counter() - 1.0, thread_id="t1")  # ~1000ms
+
+    records = {rec.getMessage(): rec.levelname for rec in caplog.records}
+    fast = [msg for msg in records if "op_fast" in msg]
+    slow = [msg for msg in records if "op_slow" in msg]
+    assert fast and "elapsed_ms" in fast[0] and records[fast[0]] == "DEBUG"
+    assert slow and records[slow[0]] == "WARNING"  # >500ms -> WARNING
 
 
 def test_preserves_strings_without_null() -> None:

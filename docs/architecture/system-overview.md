@@ -102,7 +102,7 @@ flowchart TB
 | `streaming.py` | `StreamSubscriptionManager` — subscribes clients to a thread's event stream, tracks `RunHandle`s, filters events (`RunStreamFilter`, `ProtocolStreamFilter`), cleans up on terminal events/disconnect. |
 | `event_bus.py` | `PublishingRepository` (persist+publish decorator; publish is **best-effort** — a broker failure is logged, not fatal, since the event is already persisted); `InMemoryEventBroker` and `RabbitMQStreamBroker` (bounds every published body under the RabbitMQ frame limit via `truncate_oversized_strings`/`compact_event_data` — which keeps channel discriminators like a tools event's `event` so the SDK doesn't choke — and reconnects the producer on send failure); broker factory. |
 | `store.py` | `Repository` Protocol + `InMemoryRepository` (threads, runs, run snapshots, events, condition-based waits). |
-| `store_postgres.py` | `PostgresRepository` — durable `stream_threads`, `stream_runs`, `stream_run_snapshots`, `stream_events`; schema bootstrap; sequence generation; `sanitize_for_jsonb` strips the NUL code point (`U+0000`) from payloads before every JSONB write (PostgreSQL cannot store NUL, which raw tool/binary content can otherwise carry). |
+| `store_postgres.py` | `PostgresRepository` — durable `stream_threads`, **`stream_thread_history`** (history split out of the thread row so `list_threads`/`get_thread` stay fast — see below), `stream_runs`, `stream_run_snapshots`, `stream_events`; schema bootstrap + one-time history migration; per-op timing (`_log_timing`); sequence generation; `sanitize_for_jsonb` strips the NUL code point (`U+0000`) from payloads before every JSONB write (PostgreSQL cannot store NUL, which raw tool/binary content can otherwise carry). |
 | `projections.py` | Derives run-scoped views from checkpoint history (`project_run_checkpoints`); `build_run_snapshot` projects a finished run once for storage. |
 | `protocol.py` | Channel/namespace subscription matching and SSE frame serialization. |
 | `models.py` | Pydantic models: `ThreadRecord`, `RunRecord`, `RunSnapshot`, `ThreadState`, `Checkpoint`, `ProtocolCommand/Event/Success/Error`. |
@@ -147,7 +147,7 @@ flowchart TB
 ## External Dependencies
 
 ### Runtime services / infrastructure
-- **PostgreSQL** — application store (`stream_threads`, `stream_runs`, `stream_run_snapshots`, `stream_events`) and the LangGraph `AsyncPostgresSaver` checkpointer.
+- **PostgreSQL** — application store (`stream_threads`, `stream_thread_history`, `stream_runs`, `stream_run_snapshots`, `stream_events`) and the LangGraph `AsyncPostgresSaver` checkpointer.
 - **RabbitMQ** — two roles: the **Streams protocol** (port 5552, via `rstream`) as the streaming event bus, and **AMQP** (port 5672) as the Celery task-queue broker.
 - **Celery** — distributed task execution for agent runs (optional; asyncio in-process is the default).
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections import defaultdict
 from copy import deepcopy
 from typing import Any
@@ -67,8 +68,12 @@ class PostgresRepository:
             open=False,
             kwargs={"autocommit": True, "prepare_threshold": 0},
         )
+        setup_start = time.perf_counter()
         await self._pool.open()
         async with self._pool.connection() as conn:
+            # Thread row holds only the "hot" columns; the (potentially huge)
+            # per-checkpoint history lives in its own table so listing/opening
+            # threads never drags megabytes of history off disk.
             await conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS stream_threads (
@@ -77,8 +82,7 @@ class PostgresRepository:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     metadata JSONB NOT NULL DEFAULT '{}',
-                    state JSONB NOT NULL,
-                    history JSONB NOT NULL
+                    state JSONB NOT NULL
                 )
                 """
             )
@@ -88,6 +92,41 @@ class PostgresRepository:
                 ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'
                 """
             )
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS stream_thread_history (
+                    thread_id TEXT PRIMARY KEY,
+                    updated_at TEXT NOT NULL,
+                    history JSONB NOT NULL DEFAULT '[]'
+                )
+                """
+            )
+            # One-time migration: move an existing history column out of
+            # stream_threads into stream_thread_history, then drop it. Idempotent
+            # (guarded on the column still existing).
+            has_history_col = await (
+                await conn.execute(
+                    """
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'stream_threads' AND column_name = 'history'
+                    """
+                )
+            ).fetchone()
+            if has_history_col:
+                migrate_start = time.perf_counter()
+                logger.info("store.migrate.thread_history.start")
+                await conn.execute(
+                    """
+                    INSERT INTO stream_thread_history (thread_id, updated_at, history)
+                    SELECT thread_id, updated_at, history FROM stream_threads
+                    ON CONFLICT (thread_id) DO NOTHING
+                    """
+                )
+                await conn.execute("ALTER TABLE stream_threads DROP COLUMN IF EXISTS history")
+                logger.info(
+                    "store.migrate.thread_history.complete elapsed_ms=%.1f",
+                    (time.perf_counter() - migrate_start) * 1000,
+                )
             await conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS stream_runs (
@@ -142,6 +181,7 @@ class PostgresRepository:
                 )
                 """
             )
+        self._log_timing("setup", setup_start)
 
     async def close(self) -> None:
         if self._pool is not None:
@@ -157,21 +197,37 @@ class PostgresRepository:
             raise RuntimeError("PostgresRepository.setup() was not called.")
         return self._jsonb(sanitize_for_jsonb(value))
 
+    def _log_timing(self, op: str, start: float, **fields: Any) -> None:
+        """Log how long a repository operation took, escalating level with time."""
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        if elapsed_ms > 500:
+            level = logging.WARNING
+        elif elapsed_ms > 100:
+            level = logging.INFO
+        else:
+            level = logging.DEBUG
+        extra = " ".join(f"{key}={value}" for key, value in fields.items())
+        logger.log(level, "store.%s.timing elapsed_ms=%.1f %s", op, elapsed_ms, extra)
+
     async def get_thread(self, thread_id: str) -> ThreadRecord | None:
+        start = time.perf_counter()
         pool = self._require_pool()
         async with pool.connection() as conn:
             row = await (
                 await conn.execute(
                     """
-                    SELECT thread_id, assistant_id, created_at, updated_at, metadata, state, history
+                    SELECT thread_id, assistant_id, created_at, updated_at, metadata, state
                     FROM stream_threads
                     WHERE thread_id = %s
                     """,
                     (thread_id,),
                 )
             ).fetchone()
+        self._log_timing("get_thread", start, thread_id=thread_id, found=row is not None)
         if row is None:
             return None
+        # history is intentionally NOT loaded here (use get_history) — it can be
+        # huge and is not needed to render a thread summary or its latest state.
         return ThreadRecord(
             thread_id=row[0],
             assistant_id=row[1],
@@ -179,16 +235,17 @@ class PostgresRepository:
             updated_at=row[3],
             metadata=row[4],
             state=ThreadState.model_validate(row[5]),
-            history=[ThreadState.model_validate(item) for item in row[6]],
+            history=[],
         )
 
     async def list_threads(self, limit: int = 50, offset: int = 0) -> list[ThreadRecord]:
+        start = time.perf_counter()
         pool = self._require_pool()
         async with pool.connection() as conn:
             rows = await (
                 await conn.execute(
                     """
-                    SELECT thread_id, assistant_id, created_at, updated_at, metadata, state, history
+                    SELECT thread_id, assistant_id, created_at, updated_at, metadata, state
                     FROM stream_threads
                     ORDER BY updated_at DESC
                     LIMIT %s OFFSET %s
@@ -196,6 +253,9 @@ class PostgresRepository:
                     (limit, offset),
                 )
             ).fetchall()
+        self._log_timing("list_threads", start, count=len(rows), limit=limit, offset=offset)
+        # history omitted (see get_thread) — this is the hot path for the UI's
+        # thread list and must stay cheap.
         return [
             ThreadRecord(
                 thread_id=row[0],
@@ -204,7 +264,7 @@ class PostgresRepository:
                 updated_at=row[3],
                 metadata=row[4],
                 state=ThreadState.model_validate(row[5]),
-                history=[ThreadState.model_validate(item) for item in row[6]],
+                history=[],
             )
             for row in rows
         ]
@@ -237,24 +297,36 @@ class PostgresRepository:
             )
             pool = self._require_pool()
             async with pool.connection() as conn:
-                await conn.execute(
-                    """
-                    INSERT INTO stream_threads (
-                        thread_id, assistant_id, created_at, updated_at, metadata, state, history
+                async with conn.transaction():
+                    await conn.execute(
+                        """
+                        INSERT INTO stream_threads (
+                            thread_id, assistant_id, created_at, updated_at, metadata, state
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (thread_id) DO NOTHING
+                        """,
+                        (
+                            thread.thread_id,
+                            thread.assistant_id,
+                            thread.created_at,
+                            thread.updated_at,
+                            self._json(thread.metadata),
+                            self._json(thread.state.model_dump(mode="json")),
+                        ),
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (thread_id) DO NOTHING
-                    """,
-                    (
-                        thread.thread_id,
-                        thread.assistant_id,
-                        thread.created_at,
-                        thread.updated_at,
-                        self._json(thread.metadata),
-                        self._json(thread.state.model_dump(mode="json")),
-                        self._json([item.model_dump(mode="json") for item in thread.history]),
-                    ),
-                )
+                    await conn.execute(
+                        """
+                        INSERT INTO stream_thread_history (thread_id, updated_at, history)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (thread_id) DO NOTHING
+                        """,
+                        (
+                            thread.thread_id,
+                            thread.updated_at,
+                            self._json([item.model_dump(mode="json") for item in thread.history]),
+                        ),
+                    )
             return deepcopy(thread)
 
     async def delete_thread(self, thread_id: str) -> bool:
@@ -265,6 +337,7 @@ class PostgresRepository:
                     await conn.execute("DELETE FROM stream_events WHERE thread_id = %s", (thread_id,))
                     await conn.execute("DELETE FROM stream_run_snapshots WHERE thread_id = %s", (thread_id,))
                     await conn.execute("DELETE FROM stream_runs WHERE thread_id = %s", (thread_id,))
+                    await conn.execute("DELETE FROM stream_thread_history WHERE thread_id = %s", (thread_id,))
                     result = await conn.execute("DELETE FROM stream_threads WHERE thread_id = %s", (thread_id,))
         return result.rowcount > 0
 
@@ -287,61 +360,59 @@ class PostgresRepository:
             return deepcopy(thread)
 
     async def save_thread_state(self, thread_id: str, state: ThreadState) -> None:
+        start = time.perf_counter()
         async with self._lock:
             pool = self._require_pool()
+            now = now_iso()
             state_json = state.model_dump(mode="json")
             async with pool.connection() as conn:
                 async with conn.transaction():
-                    row = await (
+                    # Latest state lives in stream_threads (hot); the growing
+                    # history lives in stream_thread_history (cold).
+                    await conn.execute(
+                        """
+                        INSERT INTO stream_threads (
+                            thread_id, assistant_id, created_at, updated_at, metadata, state
+                        )
+                        VALUES (%s, NULL, %s, %s, %s, %s)
+                        ON CONFLICT (thread_id) DO UPDATE SET
+                            state = EXCLUDED.state,
+                            updated_at = EXCLUDED.updated_at
+                        """,
+                        (thread_id, now, now, self._json({}), self._json(state_json)),
+                    )
+                    hist_row = await (
                         await conn.execute(
-                            """
-                            SELECT history
-                            FROM stream_threads
-                            WHERE thread_id = %s
-                            FOR UPDATE
-                            """,
+                            "SELECT history FROM stream_thread_history WHERE thread_id = %s FOR UPDATE",
                             (thread_id,),
                         )
                     ).fetchone()
                     history = [state_json]
-                    if row is not None and isinstance(row[0], list):
-                        history.extend(row[0])
-                    if row is None:
-                        await conn.execute(
-                            """
-                            INSERT INTO stream_threads (
-                                thread_id, assistant_id, created_at, updated_at, metadata, state, history
-                            )
-                            VALUES (%s, NULL, %s, %s, %s, %s, %s)
-                            """,
-                            (
-                                thread_id,
-                                now_iso(),
-                                now_iso(),
-                                self._json({}),
-                                self._json(state_json),
-                                self._json(history),
-                            ),
-                        )
-                    else:
-                        await conn.execute(
-                            """
-                            UPDATE stream_threads
-                            SET state = %s, history = %s, updated_at = %s
-                            WHERE thread_id = %s
-                            """,
-                            (self._json(state_json), self._json(history), now_iso(), thread_id),
-                        )
+                    if hist_row is not None and isinstance(hist_row[0], list):
+                        history.extend(hist_row[0])
+                    await conn.execute(
+                        """
+                        INSERT INTO stream_thread_history (thread_id, updated_at, history)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (thread_id) DO UPDATE SET
+                            history = EXCLUDED.history,
+                            updated_at = EXCLUDED.updated_at
+                        """,
+                        (thread_id, now, self._json(history)),
+                    )
+        self._log_timing("save_thread_state", start, thread_id=thread_id, history_len=len(history))
 
     async def get_history(self, thread_id: str, limit: int) -> list[ThreadState]:
+        start = time.perf_counter()
         pool = self._require_pool()
         async with pool.connection() as conn:
             row = await (
                 await conn.execute(
-                    "SELECT history FROM stream_threads WHERE thread_id = %s",
+                    "SELECT history FROM stream_thread_history WHERE thread_id = %s",
                     (thread_id,),
                 )
             ).fetchone()
+        self._log_timing("get_history", start, thread_id=thread_id, found=row is not None)
         if row is None:
             return []
         return [ThreadState.model_validate(item) for item in row[0][:limit]]
