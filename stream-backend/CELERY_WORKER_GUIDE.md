@@ -244,7 +244,10 @@ export STREAM_BACKEND_CELERY_RESULT_BACKEND="rpc://"
 
 # Worker Settings
 export STREAM_BACKEND_CELERY_PREFETCH_MULTIPLIER=1
-export STREAM_BACKEND_CELERY_ACKS_LATE=true
+# Acknowledge EARLY (default). A run's lifecycle/recovery is tracked in our own
+# store, so we don't want the broker to redeliver + re-execute a run if a worker
+# dies mid-task. Set to true only if you want broker-driven redelivery.
+export STREAM_BACKEND_CELERY_ACKS_LATE=false
 
 # Testing vs live agent (both API and worker honor these)
 #   Dummy agent = deterministic stream (two subagents + messages + tool actions
@@ -274,6 +277,27 @@ celery -A worker.celery_app worker --concurrency=4
 # With result backend
 celery -A worker.celery_app worker --loglevel=info --without-gossip --without-mingle
 ```
+
+### Drop all pending tasks (purge the queue)
+
+Removes tasks still waiting in the queue (already-running tasks are unaffected):
+
+```bash
+cd stream-backend
+python -m worker.purge                    # purge the configured queue(s)
+python -m worker.purge deep-research-runs # or a specific queue name
+
+# equivalently, the built-in celery command:
+celery -A worker.celery_app purge -f -Q deep-research-runs
+```
+
+## Task acknowledgement
+
+Tasks are acknowledged **early** (`task_acks_late=false`, `task_reject_on_worker_lost=false`).
+Run lifecycle and recovery are tracked in the app's own store, so the broker must
+not redeliver a task when a worker dies mid-run — that would re-execute the run
+and race the original. Override with `STREAM_BACKEND_CELERY_ACKS_LATE=true` only
+if you deliberately want broker-driven redelivery.
 
 ## Testing the Setup
 

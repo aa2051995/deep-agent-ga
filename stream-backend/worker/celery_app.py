@@ -57,7 +57,13 @@ celery_app.conf.update(
 celery_app.conf.update(
     task_track_started=True,
     worker_prefetch_multiplier=int(os.getenv("STREAM_BACKEND_CELERY_PREFETCH_MULTIPLIER", "1")),
-    task_acks_late=os.getenv("STREAM_BACKEND_CELERY_ACKS_LATE", "true").lower() not in {"0", "false", "no"},
+    # Acknowledge EARLY (on delivery), not late (after completion). A run's own
+    # lifecycle/recovery is tracked in our own store, so we do NOT want the broker
+    # to redeliver a task if a worker dies mid-run — that would re-execute the run
+    # and race the original. Default is early-ack; set ACKS_LATE=true to override.
+    task_acks_late=os.getenv("STREAM_BACKEND_CELERY_ACKS_LATE", "false").lower() not in {"0", "false", "no"},
+    # With early ack there is nothing to requeue on worker loss; make that explicit.
+    task_reject_on_worker_lost=False,
 )
 
 
