@@ -11,23 +11,23 @@ from app.store import InMemoryRepository
 
 class FakeRunScheduler:
     def __init__(self) -> None:
-        self.runs: list[tuple[dict[str, Any], Any]] = []
-        self.resumes: list[tuple[dict[str, Any], Any]] = []
+        self.runs: list[tuple[dict[str, Any], Any, str | None]] = []
+        self.resumes: list[tuple[dict[str, Any], Any, str | None]] = []
         self.revokes: list[tuple[str, bool]] = []
 
-    def enqueue_run(self, run_record: dict[str, Any], input_value: Any = None) -> str:
-        self.runs.append((run_record, input_value))
-        return f"task-run-{len(self.runs)}"
+    def enqueue_run(self, run_record: dict[str, Any], input_value: Any = None, task_id: str | None = None) -> str:
+        self.runs.append((run_record, input_value, task_id))
+        return task_id or f"task-run-{len(self.runs)}"
 
-    def enqueue_resume(self, run_record: dict[str, Any], resume_value: Any = None) -> str:
-        self.resumes.append((run_record, resume_value))
-        return f"task-resume-{len(self.resumes)}"
+    def enqueue_resume(self, run_record: dict[str, Any], resume_value: Any = None, task_id: str | None = None) -> str:
+        self.resumes.append((run_record, resume_value, task_id))
+        return task_id or f"task-resume-{len(self.resumes)}"
 
     def revoke(self, task_id: str, *, terminate: bool = False) -> None:
         self.revokes.append((task_id, terminate))
 
     def is_task_active(self, task_id: str) -> bool:
-        return task_id.startswith("task-")
+        return bool(task_id)
 
 
 class CelerySchedulerTests(unittest.IsolatedAsyncioTestCase):
@@ -48,8 +48,13 @@ class CelerySchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(scheduler.runs[0][1], {"messages": []})
         self.assertIsNotNone(saved)
         self.assertEqual(saved.metadata["worker_backend"], "celery")
-        self.assertEqual(saved.metadata["celery_task_id"], "task-run-1")
         self.assertEqual(saved.metadata["celery_action"], "run")
+        # Task id is pre-generated, persisted, passed to enqueue, and already in
+        # the enqueued run_record (so the worker's copy carries it).
+        task_id = saved.metadata["celery_task_id"]
+        self.assertTrue(task_id)
+        self.assertEqual(scheduler.runs[0][2], task_id)
+        self.assertEqual(scheduler.runs[0][0]["metadata"]["celery_task_id"], task_id)
 
     async def test_resume_run_does_not_duplicate_known_celery_task(self) -> None:
         repo = InMemoryRepository()
@@ -85,9 +90,12 @@ class CelerySchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(scheduler.resumes[0][1], {"answer": "continue"})
         self.assertIsNotNone(saved)
         self.assertEqual(saved.metadata["worker_backend"], "celery")
-        self.assertEqual(saved.metadata["celery_task_id"], "task-resume-1")
         self.assertEqual(saved.metadata["celery_action"], "resume")
         self.assertEqual(saved.kwargs["resume"], {"answer": "continue"})
+        task_id = saved.metadata["celery_task_id"]
+        self.assertTrue(task_id)
+        self.assertEqual(scheduler.resumes[0][2], task_id)
+        self.assertEqual(scheduler.resumes[0][0]["metadata"]["celery_task_id"], task_id)
 
     async def test_cancel_run_revokes_celery_task(self) -> None:
         repo = InMemoryRepository()

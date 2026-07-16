@@ -105,6 +105,22 @@ def test_is_task_active_uses_status_when_backend_enabled():
     app.control.inspect.assert_not_called()
 
 
+def test_enqueue_run_forwards_task_id_to_send_task():
+    app = _app_without_backend()
+    app.send_task.return_value.id = "my-id"
+    scheduler = _scheduler(app)
+    scheduler.enqueue_run({"thread_id": "t", "run_id": "r"}, "in", task_id="my-id")
+    assert app.send_task.call_args.kwargs["task_id"] == "my-id"
+
+
+def test_enqueue_resume_forwards_task_id_to_send_task():
+    app = _app_without_backend()
+    app.send_task.return_value.id = "my-id"
+    scheduler = _scheduler(app)
+    scheduler.enqueue_resume({"thread_id": "t", "run_id": "r"}, "resume", task_id="my-id")
+    assert app.send_task.call_args.kwargs["task_id"] == "my-id"
+
+
 def test_entry_task_id_shapes():
     assert CeleryRunScheduler._entry_task_id({"id": "A"}) == "A"
     assert CeleryRunScheduler._entry_task_id({"request": {"id": "B"}}) == "B"

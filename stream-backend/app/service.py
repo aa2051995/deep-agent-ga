@@ -32,8 +32,8 @@ logger = logging.getLogger("stream_backend.service")
 
 
 class RunScheduler(Protocol):
-    def enqueue_run(self, run_record: dict[str, Any], input_value: Any = None) -> str: ...
-    def enqueue_resume(self, run_record: dict[str, Any], resume_value: Any = None) -> str: ...
+    def enqueue_run(self, run_record: dict[str, Any], input_value: Any = None, task_id: str | None = None) -> str: ...
+    def enqueue_resume(self, run_record: dict[str, Any], resume_value: Any = None, task_id: str | None = None) -> str: ...
     def revoke(self, task_id: str, *, terminate: bool = False) -> None: ...
 
 
@@ -200,8 +200,20 @@ class ProtocolService:
             )
             return False
         if self.run_scheduler is not None:
+            # Pre-generate the task id and persist it (and put it in the enqueued
+            # run_record) BEFORE enqueuing. Otherwise the worker's copy of the run
+            # lacks celery_task_id and its own save clobbers the API's — leaving
+            # is_run_streaming unable to tell the run is active.
+            task_id = new_id()
+            run.metadata = {
+                **run.metadata,
+                "worker_backend": "celery",
+                "celery_task_id": task_id,
+                "celery_action": "run",
+            }
+            await self.repo.save_run(run)
             try:
-                task_id = self.run_scheduler.enqueue_run(run.model_dump(mode="json"), input_value)
+                self.run_scheduler.enqueue_run(run.model_dump(mode="json"), input_value, task_id=task_id)
             except Exception:
                 logger.exception(
                     "service.run.schedule_failed thread_id=%s run_id=%s runner_backend=%s "
@@ -211,13 +223,6 @@ class ProtocolService:
                     self.runner_backend,
                 )
                 raise
-            run.metadata = {
-                **run.metadata,
-                "worker_backend": "celery",
-                "celery_task_id": task_id,
-                "celery_action": "run",
-            }
-            await self.repo.save_run(run)
             logger.info(
                 "service.run.scheduled_to_worker thread_id=%s run_id=%s task_id=%s queue=%s",
                 run.thread_id,
@@ -480,9 +485,11 @@ class ProtocolService:
             run.metadata = {**run.metadata, "recovered": True}
             if resume_value is not None:
                 run.kwargs = {**run.kwargs, "resume": resume_value}
-            await self.repo.save_run(run)
             if self.run_scheduler is not None:
-                task_id = self.run_scheduler.enqueue_resume(run.model_dump(mode="json"), resume_value)
+                # Pre-generate + persist the task id before enqueuing (see
+                # start_run_task): the worker's copy must carry celery_task_id so
+                # its saves don't wipe it.
+                task_id = new_id()
                 run.metadata = {
                     **run.metadata,
                     "worker_backend": "celery",
@@ -490,6 +497,7 @@ class ProtocolService:
                     "celery_action": "resume",
                 }
                 await self.repo.save_run(run)
+                self.run_scheduler.enqueue_resume(run.model_dump(mode="json"), resume_value, task_id=task_id)
                 logger.info(
                     "run.resume.celery_scheduled thread_id=%s run_id=%s task_id=%s",
                     thread_id,
@@ -497,6 +505,7 @@ class ProtocolService:
                     task_id,
                 )
                 return True
+            await self.repo.save_run(run)
             runner_resume = getattr(self.runner, "resume", None)
             if runner_resume is None:
                 task = asyncio.create_task(self.runner.run(run, run.kwargs.get("input")))

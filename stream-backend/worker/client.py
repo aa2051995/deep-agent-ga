@@ -100,20 +100,22 @@ class CeleryRunScheduler:
             logger.warning("celery.task.active.inspect_failed task_id=%s assume_active=True", task_id)
             return True
 
-    def enqueue_run(self, run_record: dict[str, Any], input_value: Any = None) -> str:
+    def enqueue_run(self, run_record: dict[str, Any], input_value: Any = None, task_id: str | None = None) -> str:
         result = self.app.send_task(
             "deep_research.run_agent",
             kwargs={"run_record": run_record, "input_value": input_value},
             queue=self.queue,
+            task_id=task_id,
         )
         logger.info("celery.enqueue.run thread_id=%s run_id=%s task_id=%s", run_record.get("thread_id"), run_record.get("run_id"), result.id)
         return str(result.id)
 
-    def enqueue_resume(self, run_record: dict[str, Any], resume_value: Any = None) -> str:
+    def enqueue_resume(self, run_record: dict[str, Any], resume_value: Any = None, task_id: str | None = None) -> str:
         result = self.app.send_task(
             "deep_research.resume_agent",
             kwargs={"run_record": run_record, "resume_value": resume_value},
             queue=self.queue,
+            task_id=task_id,
         )
         logger.info("celery.enqueue.resume thread_id=%s run_id=%s task_id=%s", run_record.get("thread_id"), run_record.get("run_id"), result.id)
         return str(result.id)

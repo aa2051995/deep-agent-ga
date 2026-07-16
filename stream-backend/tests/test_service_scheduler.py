@@ -70,7 +70,6 @@ async def test_start_run_task_logs_not_scheduled_reason(monkeypatch, caplog):
 async def test_start_run_task_schedules_to_worker(monkeypatch, caplog):
     monkeypatch.setenv("STREAM_BACKEND_RUNNER_BACKEND", "celery")
     scheduler = MagicMock()
-    scheduler.enqueue_run.return_value = "task-123"
     repo = InMemoryRepository()
     service = ProtocolService(repo, run_scheduler=scheduler)
     run = RunRecord(run_id="r1", thread_id="t1", assistant_id="a1")
@@ -80,7 +79,16 @@ async def test_start_run_task_schedules_to_worker(monkeypatch, caplog):
 
     assert scheduled is True
     scheduler.enqueue_run.assert_called_once()
-    assert run.metadata.get("celery_task_id") == "task-123"
+    # Task id is pre-generated (not taken from the enqueue return), persisted
+    # before enqueue, and passed to enqueue so the worker's copy carries it.
+    task_id = run.metadata.get("celery_task_id")
+    assert task_id
+    assert scheduler.enqueue_run.call_args.kwargs.get("task_id") == task_id
+    saved = await repo.get_run("t1", "r1")
+    assert saved is not None and saved.metadata.get("celery_task_id") == task_id
+    # the enqueued run_record already includes the task id (worker won't clobber it)
+    enqueued_record = scheduler.enqueue_run.call_args.args[0]
+    assert enqueued_record["metadata"]["celery_task_id"] == task_id
     assert any("scheduled_to_worker" in rec.message for rec in caplog.records)
 
 

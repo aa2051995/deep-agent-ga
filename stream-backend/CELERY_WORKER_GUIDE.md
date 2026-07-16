@@ -221,6 +221,12 @@ it started a **second** execution that raced the original, colliding on the
   (seconds, default 3).
 - `append_event` is collision-safe (`ON CONFLICT ... DO NOTHING` + retry), so
   even a genuine double-append can never raise `UniqueViolation`.
+- The Celery `task_id` is **pre-generated** and persisted to `run.metadata`
+  *before* enqueuing (and included in the enqueued run_record), so
+  `is_run_streaming` can always find it. Previously the id was only known after
+  `enqueue`, so the worker's copy lacked it and the worker's own run-save wiped
+  it from the DB — leaving `service.is_run_streaming.celery_task_id_missing` and
+  `is_streaming=False` for a run that was actually running.
 
 ## Configuration
 

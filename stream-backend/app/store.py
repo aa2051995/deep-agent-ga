@@ -59,6 +59,14 @@ class InMemoryRepository:
         self._conditions: dict[str, asyncio.Condition] = defaultdict(asyncio.Condition)
         self._lock = asyncio.Lock()
 
+    async def setup(self) -> None:
+        """No-op: parity with PostgresRepository so callers can await setup()."""
+        return None
+
+    async def close(self) -> None:
+        """No-op: parity with PostgresRepository so callers can await close()."""
+        return None
+
     async def get_thread(self, thread_id: str) -> ThreadRecord | None:
         async with self._lock:
             thread = self._threads.get(thread_id)

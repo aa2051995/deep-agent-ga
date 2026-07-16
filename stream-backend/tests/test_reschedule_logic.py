@@ -1,62 +1,64 @@
 """Unit tests for smart run rescheduling logic."""
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 from app.models import RunRecord
-from app.service import ProtocolService
 from worker.client import CeleryRunScheduler
 
 
+def _scheduler_with_result_backend() -> CeleryRunScheduler:
+    # Bypass __init__ (which imports celery) and enable a result backend so
+    # is_task_active/get_task_status read AsyncResult.status.
+    scheduler = CeleryRunScheduler.__new__(CeleryRunScheduler)
+    scheduler.app = MagicMock()
+    scheduler.app.conf.result_backend = "rpc://"
+    scheduler.queue = "q"
+    return scheduler
+
+
 def test_celery_scheduler_task_active() -> None:
-    scheduler = CeleryRunScheduler()
-    
-    scheduler.app.AsyncResult = MagicMock()
+    scheduler = _scheduler_with_result_backend()
     mock_result = MagicMock()
     mock_result.status = "STARTED"
     scheduler.app.AsyncResult.return_value = mock_result
-    
+
     assert scheduler.is_task_active("test-task-id")
-    
+
     mock_result.status = "SUCCESS"
     assert not scheduler.is_task_active("test-task-id")
 
 
 def test_celery_scheduler_get_task_status() -> None:
-    scheduler = CeleryRunScheduler()
-    
-    scheduler.app.AsyncResult = MagicMock()
+    scheduler = _scheduler_with_result_backend()
     mock_result = MagicMock()
     mock_result.status = "PENDING"
     scheduler.app.AsyncResult.return_value = mock_result
-    
-    status = scheduler.get_task_status("test-task-id")
-    assert status == "PENDING"
+
+    assert scheduler.get_task_status("test-task-id") == "PENDING"
+
+
+def test_celery_scheduler_get_task_status_none_without_result_backend() -> None:
+    scheduler = _scheduler_with_result_backend()
+    scheduler.app.conf.result_backend = None
+    assert scheduler.get_task_status("test-task-id") is None
 
 
 def test_celery_scheduler_task_active_states() -> None:
-    scheduler = CeleryRunScheduler()
-    
+    scheduler = _scheduler_with_result_backend()
     for active_status in ["PENDING", "STARTED", "RETRY"]:
-        scheduler.app.AsyncResult = MagicMock()
         mock_result = MagicMock()
         mock_result.status = active_status
         scheduler.app.AsyncResult.return_value = mock_result
-        
         assert scheduler.is_task_active("test-task-id")
 
 
 def test_celery_scheduler_task_inactive_states() -> None:
-    scheduler = CeleryRunScheduler()
-    
+    scheduler = _scheduler_with_result_backend()
     for inactive_status in ["SUCCESS", "FAILURE", "REVOKED"]:
-        scheduler.app.AsyncResult = MagicMock()
         mock_result = MagicMock()
         mock_result.status = inactive_status
         scheduler.app.AsyncResult.return_value = mock_result
-        
         assert not scheduler.is_task_active("test-task-id")
 
 
