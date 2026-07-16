@@ -68,9 +68,31 @@ def test_is_task_active_finds_reserved_and_scheduled_shapes():
     assert scheduler.is_task_active("S") is True
 
 
-def test_is_task_active_inspect_failure_returns_false():
+def test_is_task_active_inspect_failure_assumes_active():
+    # Cannot determine -> assume active, so the UI joins and resume does not
+    # double-execute a possibly-still-running run.
     app = _app_without_backend()
     app.control.inspect.side_effect = RuntimeError("broker down")
+    scheduler = _scheduler(app)
+    assert scheduler.is_task_active("T") is True
+
+
+def test_is_task_active_no_worker_response_assumes_active():
+    app = _app_without_backend()
+    inspector = app.control.inspect.return_value
+    inspector.active.return_value = None
+    inspector.reserved.return_value = None
+    inspector.scheduled.return_value = None
+    scheduler = _scheduler(app)
+    assert scheduler.is_task_active("T") is True
+
+
+def test_is_task_active_false_when_workers_respond_without_task():
+    app = _app_without_backend()
+    inspector = app.control.inspect.return_value
+    inspector.active.return_value = {"worker1": []}
+    inspector.reserved.return_value = {"worker1": []}
+    inspector.scheduled.return_value = {"worker1": []}
     scheduler = _scheduler(app)
     assert scheduler.is_task_active("T") is False
 

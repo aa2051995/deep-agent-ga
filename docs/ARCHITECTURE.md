@@ -111,7 +111,7 @@ The service warns if `runner_backend=celery` is used without `store=postgres` + 
   2. **LangGraph checkpointer** — `AsyncPostgresSaver` from `langgraph-checkpoint-postgres`, set up in `research_runtime.py:375-399` for true agent state/resume.
 - **In-memory fallback** — `InMemoryRepository` (dev/test); events capped at 1000/thread.
 
-Event sequencing differs by store: in-memory starts seq at 1, Postgres uses `MAX(seq)+1`, RabbitMQ uses the stream offset as seq.
+Event sequencing differs by store: in-memory starts seq at 1, Postgres uses `MAX(seq)+1`, RabbitMQ uses the stream offset as seq. `MAX(seq)+1` is not atomic across processes, so `PostgresRepository.append_event` inserts with `ON CONFLICT (thread_id, seq) DO NOTHING` and retries with a recomputed seq — otherwise a run's original worker task and a resume/second task appending to the same thread would collide on the `stream_events` primary key (`UniqueViolation`).
 
 ---
 

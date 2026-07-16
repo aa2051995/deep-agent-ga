@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import defaultdict
 from copy import deepcopy
 from typing import Any
@@ -16,6 +17,8 @@ from .models import (
     now_iso,
 )
 from .store import empty_state
+
+logger = logging.getLogger("stream_backend.store_postgres")
 
 
 def sanitize_for_jsonb(value: Any) -> Any:
@@ -503,10 +506,17 @@ class PostgresRepository:
         namespace: list[str] | None = None,
         node: str | None = None,
     ) -> ProtocolEvent:
-        async with self._lock:
-            pool = self._require_pool()
-            async with pool.connection() as conn:
-                async with conn.transaction():
+        pool = self._require_pool()
+        # seq = MAX(seq)+1 is not atomic across processes: when a run's original
+        # worker task and a resume/second task both append to the same thread,
+        # they can compute the same seq and collide on the (thread_id, seq)
+        # primary key. INSERT ... ON CONFLICT DO NOTHING + retry lets the unique
+        # constraint serialize concurrent appenders instead of crashing.
+        max_attempts = 25
+        event: ProtocolEvent | None = None
+        async with self._lock:  # cheap: removes intra-process contention
+            for attempt in range(max_attempts):
+                async with pool.connection() as conn:
                     row = await (
                         await conn.execute(
                             "SELECT COALESCE(MAX(seq), 0) + 1 FROM stream_events WHERE thread_id = %s",
@@ -514,19 +524,34 @@ class PostgresRepository:
                         )
                     ).fetchone()
                     seq = int(row[0])
-                    event = ProtocolEvent(
+                    candidate = ProtocolEvent(
                         event_id=str(seq),
                         seq=seq,
                         method=method,
                         params=EventParams(namespace=namespace or [], data=data, node=node),
                     )
-                    await conn.execute(
+                    result = await conn.execute(
                         """
                         INSERT INTO stream_events (thread_id, seq, event)
                         VALUES (%s, %s, %s)
+                        ON CONFLICT (thread_id, seq) DO NOTHING
                         """,
-                        (thread_id, seq, self._json(event.model_dump(mode="json"))),
+                        (thread_id, seq, self._json(candidate.model_dump(mode="json"))),
                     )
+                if result.rowcount and result.rowcount > 0:
+                    event = candidate
+                    break
+                logger.debug(
+                    "store.append_event.seq_conflict thread_id=%s seq=%s attempt=%s",
+                    thread_id,
+                    seq,
+                    attempt,
+                )
+            if event is None:
+                raise RuntimeError(
+                    f"append_event: could not allocate a sequence for thread {thread_id} "
+                    f"after {max_attempts} attempts (high concurrent write contention)."
+                )
 
         condition = self._conditions[thread_id]
         async with condition:

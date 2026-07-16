@@ -75,20 +75,30 @@ class CeleryRunScheduler:
 
     def _is_task_active_via_inspect(self, task_id: str) -> bool:
         try:
-            timeout = float(os.getenv("STREAM_BACKEND_CELERY_INSPECT_TIMEOUT", "1.5"))
+            timeout = float(os.getenv("STREAM_BACKEND_CELERY_INSPECT_TIMEOUT", "3.0"))
             inspector = self.app.control.inspect(timeout=timeout)
+            any_worker_responded = False
             for getter in (inspector.active, inspector.reserved, inspector.scheduled):
-                report = getter() or {}
+                report = getter()
+                if report is None:
+                    continue  # no worker answered this probe
+                any_worker_responded = True
                 for entries in report.values():
                     for entry in entries or []:
                         if self._entry_task_id(entry) == task_id:
                             logger.debug("celery.task.active.inspect task_id=%s found=True", task_id)
                             return True
+            if not any_worker_responded:
+                # Inspect timed out / no worker answered — we cannot tell. Assume
+                # active so the UI joins the stream and resume does not spawn a
+                # second execution of a run that may still be running.
+                logger.warning("celery.task.active.inspect_no_response task_id=%s assume_active=True", task_id)
+                return True
             logger.debug("celery.task.active.inspect task_id=%s found=False", task_id)
             return False
         except Exception:
-            logger.warning("celery.task.active.inspect_failed task_id=%s", task_id)
-            return False
+            logger.warning("celery.task.active.inspect_failed task_id=%s assume_active=True", task_id)
+            return True
 
     def enqueue_run(self, run_record: dict[str, Any], input_value: Any = None) -> str:
         result = self.app.send_task(

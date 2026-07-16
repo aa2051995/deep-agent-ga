@@ -205,6 +205,23 @@ export STREAM_BACKEND_CELERY_RESULT_BACKEND="rpc://"            # uses RabbitMQ/
 export STREAM_BACKEND_CELERY_RESULT_BACKEND="db+postgresql://user:pass@localhost:5432/db"
 ```
 
+### 8. Coming back to a running run shows "resume" instead of auto-joining
+
+**Cause:** Whether a Celery run is still executing is probed with the worker
+inspect API (`is_task_active`). If inspect times out or no worker answers, the
+old code assumed the task was **dead**, so the UI offered *resume* — and clicking
+it started a **second** execution that raced the original, colliding on the
+`stream_events` primary key (`UniqueViolation`).
+
+**Fix:** Already handled in code:
+- Inspect uncertainty (timeout / no worker response / error) now assumes the run
+  is **active**, so the UI joins the stream and resume does not double-execute.
+  Only a definitive "workers answered, task not among active/reserved/scheduled"
+  reports inactive. Tune the probe with `STREAM_BACKEND_CELERY_INSPECT_TIMEOUT`
+  (seconds, default 3).
+- `append_event` is collision-safe (`ON CONFLICT ... DO NOTHING` + retry), so
+  even a genuine double-append can never raise `UniqueViolation`.
+
 ## Configuration
 
 ### Environment Variables
