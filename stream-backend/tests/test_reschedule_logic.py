@@ -1,19 +1,26 @@
 """Unit tests for smart run rescheduling logic."""
 from __future__ import annotations
 
+import importlib.util
+
+import pytest
 from unittest.mock import MagicMock
 
 from app.models import RunRecord
-from worker.client import CeleryRunScheduler
+
+pytestmark = pytest.mark.skipif(
+    importlib.util.find_spec("celery") is None, reason="celery is not installed"
+)
 
 
-def _scheduler_with_result_backend() -> CeleryRunScheduler:
-    # Bypass __init__ (which imports celery) and enable a result backend so
-    # is_task_active/get_task_status read AsyncResult.status.
-    scheduler = CeleryRunScheduler.__new__(CeleryRunScheduler)
-    scheduler.app = MagicMock()
+def _scheduler_with_result_backend():
+    # A real CeleryRunScheduler with a result backend enabled and AsyncResult
+    # mocked, so is_task_active/get_task_status read AsyncResult.status.
+    from worker.client import CeleryRunScheduler
+
+    scheduler = CeleryRunScheduler()
     scheduler.app.conf.result_backend = "rpc://"
-    scheduler.queue = "q"
+    scheduler.app.AsyncResult = MagicMock()
     return scheduler
 
 
