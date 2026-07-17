@@ -165,8 +165,8 @@ class DeepAgentDemoRunner:
             {"todos": DUMMY_TODOS_PLANNED, "run_id": run.run_id},
         )
 
-        await self._start_task_tool(run.thread_id, task1, task_calls[0]["args"])
-        await self._start_task_tool(run.thread_id, task2, task_calls[1]["args"])
+        await self._start_task_tool(run.thread_id, task1, task_calls[0]["args"], run.run_id)
+        await self._start_task_tool(run.thread_id, task2, task_calls[1]["args"], run.run_id)
 
         logger.info("fixture.run.subagents.schedule thread_id=%s run_id=%s count=2", run.thread_id, run.run_id)
         researcher_task = asyncio.create_task(
@@ -206,8 +206,8 @@ class DeepAgentDemoRunner:
         )
         logger.info("fixture.run.subagents.complete thread_id=%s run_id=%s", run.thread_id, run.run_id)
 
-        await self._finish_task_tool(run.thread_id, task1, researcher_output)
-        await self._finish_task_tool(run.thread_id, task2, analyst_output)
+        await self._finish_task_tool(run.thread_id, task1, researcher_output, run.run_id)
+        await self._finish_task_tool(run.thread_id, task2, analyst_output, run.run_id)
 
         final = ai_message(
             "Both subagents completed their tasks successfully.",
@@ -240,6 +240,7 @@ class DeepAgentDemoRunner:
             node="model:orchestrator",
             message_id=f"deep-orchestrator-final-{rt}",
             text=final["content"],
+            run_id=run.run_id,
         )
 
         run.status = "success"
@@ -329,18 +330,19 @@ class DeepAgentDemoRunner:
                 "id": checkpoint.checkpoint_id,
                 "parent_id": previous.checkpoint.checkpoint_id,
                 "step": step,
+                "run_id": run.run_id,
             },
             namespace=namespace or [],
         )
         await self.repo.append_event(
             run.thread_id,
             "values",
-            deepcopy(values),
+            {**deepcopy(values), "run_id": run.run_id},
             namespace=namespace or [],
         )
         return step
 
-    async def _start_task_tool(self, thread_id: str, tool_call_id: str, input_value: Any) -> None:
+    async def _start_task_tool(self, thread_id: str, tool_call_id: str, input_value: Any, run_id: str) -> None:
         logger.info("fixture.task_tool.start thread_id=%s tool_call_id=%s", thread_id, tool_call_id)
         await self.repo.append_event(
             thread_id,
@@ -350,6 +352,7 @@ class DeepAgentDemoRunner:
                 "tool_call_id": tool_call_id,
                 "tool_name": "task",
                 "input": input_value,
+                "run_id": run_id,
             },
             namespace=[f"tools:{tool_call_id}"],
         )
@@ -402,6 +405,7 @@ class DeepAgentDemoRunner:
                 "tool_call_id": tool_call_id,
                 "tool_name": tool_name,
                 "input": tool_input,
+                "run_id": run.run_id,
             },
             namespace=[*namespace, f"tools:{tool_call_id}"],
         )
@@ -414,17 +418,19 @@ class DeepAgentDemoRunner:
                 "event": "tool-finished",
                 "tool_call_id": tool_call_id,
                 "output": tool_output,
+                "run_id": run.run_id,
             },
             namespace=[*namespace, f"tools:{tool_call_id}"],
         )
         messages.append(tool_message(str(tool_output), tool_call_id, f"{tool_call_id}-result", tool_output))
-        messages.append(ai_message(final_text, f"{subagent_name}-final"))
+        messages.append(ai_message(final_text, f"{subagent_name}-final-{run.run_id}"))
         await self._stream_text_message(
             thread_id=run.thread_id,
             namespace=[*namespace, f"model:{subagent_name}"],
             node=f"model:{subagent_name}",
-            message_id=f"{subagent_name}-final",
+            message_id=f"{subagent_name}-final-{run.run_id}",
             text=final_text,
+            run_id=run.run_id,
         )
         thread = await self.repo.get_thread(run.thread_id)
         if thread is None:
@@ -447,7 +453,7 @@ class DeepAgentDemoRunner:
         logger.info("fixture.subagent.complete thread_id=%s run_id=%s subagent=%s", run.thread_id, run.run_id, subagent_name)
         return final_text
 
-    async def _finish_task_tool(self, thread_id: str, tool_call_id: str, output: str) -> None:
+    async def _finish_task_tool(self, thread_id: str, tool_call_id: str, output: str, run_id: str) -> None:
         logger.info("fixture.task_tool.finish thread_id=%s tool_call_id=%s output_length=%s", thread_id, tool_call_id, len(output))
         await self.repo.append_event(
             thread_id,
@@ -456,6 +462,7 @@ class DeepAgentDemoRunner:
                 "event": "tool-finished",
                 "tool_call_id": tool_call_id,
                 "output": output,
+                "run_id": run_id,
             },
             namespace=[f"tools:{tool_call_id}"],
         )
@@ -467,6 +474,7 @@ class DeepAgentDemoRunner:
         node: str,
         message_id: str,
         text: str,
+        run_id: str,
     ) -> None:
         logger.info(
             "fixture.message.stream_start thread_id=%s message_id=%s node=%s namespace=%s text_length=%s",
@@ -479,14 +487,14 @@ class DeepAgentDemoRunner:
         await self.repo.append_event(
             thread_id,
             "messages",
-            {"event": "message-start", "id": message_id, "role": "ai"},
+            {"event": "message-start", "id": message_id, "role": "ai", "run_id": run_id},
             namespace=namespace,
             node=node,
         )
         await self.repo.append_event(
             thread_id,
             "messages",
-            {"event": "content-block-start", "index": 0, "content": {"type": "text", "text": ""}},
+            {"event": "content-block-start", "index": 0, "content": {"type": "text", "text": ""}, "run_id": run_id},
             namespace=namespace,
             node=node,
         )
@@ -505,21 +513,21 @@ class DeepAgentDemoRunner:
             await self.repo.append_event(
                 thread_id,
                 "messages",
-                {"event": "content-block-delta", "index": 0, "content": {"type": "text", "text": chunk}},
+                {"event": "content-block-delta", "index": 0, "content": {"type": "text", "text": chunk}, "run_id": run_id},
                 namespace=namespace,
                 node=node,
             )
         await self.repo.append_event(
             thread_id,
             "messages",
-            {"event": "content-block-finish", "index": 0, "content": {"type": "text", "text": text}},
+            {"event": "content-block-finish", "index": 0, "content": {"type": "text", "text": text}, "run_id": run_id},
             namespace=namespace,
             node=node,
         )
         await self.repo.append_event(
             thread_id,
             "messages",
-            {"event": "message-finish", "reason": "stop"},
+            {"event": "message-finish", "reason": "stop", "run_id": run_id},
             namespace=namespace,
             node=node,
         )
