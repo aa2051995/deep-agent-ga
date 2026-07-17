@@ -73,6 +73,32 @@ async def test_dummy_agent_streams_todos_and_two_subagents():
 
 
 @pytest.mark.asyncio
+async def test_dummy_agent_resume_completes_without_rerun():
+    # Continuing/resuming a demo run must finalize it, not re-run the whole demo
+    # (which re-emits events and loops the UI's continue/interrupt).
+    repo = InMemoryRepository()
+    await repo.ensure_thread("t1", "assistant")
+    run = RunRecord(run_id="r1", thread_id="t1", assistant_id="assistant", status="running")
+    await repo.create_run(run)
+
+    await DeepAgentDemoRunner(repo).resume(run, {"answer": "continue"})
+
+    final = await repo.get_run("t1", "r1")
+    assert final is not None and final.status == "success"
+    snap = await repo.get_run_snapshot("t1", "r1")
+    assert snap is not None
+    # resume acknowledges + finishes; it must NOT spawn the demo's 2 subagents.
+    assert len(snap.subagents) == 0
+    events = await repo.list_events("t1")
+    completed = [
+        e for e in events
+        if e.method == "lifecycle" and isinstance(e.params.data, dict)
+        and e.params.data.get("event") == "completed"
+    ]
+    assert completed, "resume should emit a completed lifecycle event"
+
+
+@pytest.mark.asyncio
 async def test_dummy_agent_multiple_runs_on_one_thread_each_have_content():
     # A demo run on a thread that already has runs must still project to its own
     # messages/subagents (accumulation + run-scoped ids), not an empty snapshot.

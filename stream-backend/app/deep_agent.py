@@ -288,6 +288,61 @@ class DeepAgentDemoRunner:
         )
         logger.info("fixture.run.success thread_id=%s run_id=%s", run.thread_id, run.run_id)
 
+    async def resume(self, run: RunRecord, resume_value: Any = None) -> None:
+        """Continue a paused/detached demo run to completion.
+
+        The demo has no real interrupt to resume from, so resuming must NOT
+        re-run the whole scripted demo (that re-emits the events and makes the
+        UI's continue/interrupt loop). Instead we acknowledge the input and
+        finalize the run (terminal state, snapshot, completed lifecycle).
+        """
+        logger.info("fixture.resume thread_id=%s run_id=%s", run.thread_id, run.run_id)
+        run.status = "running"
+        await self.repo.save_run(run)
+        await self.repo.append_event(
+            run.thread_id,
+            "lifecycle",
+            {"event": "running", "run_id": run.run_id, "recovered": True},
+        )
+
+        thread = await self.repo.ensure_thread(run.thread_id, run.assistant_id)
+        previous = thread.state
+        rt = run.run_id
+        prior_values = previous.values if isinstance(previous.values, dict) else {}
+        prior_messages = prior_values.get("messages")
+        prior_messages = prior_messages if isinstance(prior_messages, list) else []
+
+        answer_text = "Resumed with your input and finished the demo run."
+        if resume_value not in (None, ""):
+            answer_text = f"Resumed with your input ({input_text(resume_value)}) and finished the demo run."
+        answer = ai_message(answer_text, f"deep-orchestrator-resume-{rt}")
+        root_messages = [*prior_messages, answer]
+        step = int(previous.metadata.get("step", 0)) + 1
+        await self._commit_state(
+            run,
+            previous,
+            {"messages": root_messages, "todos": DUMMY_TODOS_DONE},
+            step,
+            next_nodes=[],
+        )
+        await self._stream_text_message(
+            thread_id=run.thread_id,
+            namespace=[],
+            node="model:orchestrator",
+            message_id=f"deep-orchestrator-resume-{rt}",
+            text=answer_text,
+            run_id=run.run_id,
+        )
+        run.status = "success"
+        await self.repo.save_run(run)
+        await self._persist_run_snapshot(run)
+        await self.repo.append_event(
+            run.thread_id,
+            "lifecycle",
+            {"event": "completed", "run_id": run.run_id, "recovered": True},
+        )
+        logger.info("fixture.resume.success thread_id=%s run_id=%s", run.thread_id, run.run_id)
+
     async def _persist_run_snapshot(self, run: RunRecord) -> None:
         """Project the finished run once and store it for fast retrieval.
 
