@@ -108,7 +108,20 @@ class DeepAgentDemoRunner:
         previous = thread.state
         step = int(previous.metadata.get("step", 0))
 
-        user = human_message(input_text(input_value), "deep-user-input")
+        # Run-scoped ids so multiple demo runs on one thread don't collide (the
+        # snapshot projection dedupes by message id and keys subagents by the
+        # task tool-call id). Use the full run id to guarantee uniqueness.
+        rt = run.run_id
+        task1, task2 = f"task-1-{rt}", f"task-2-{rt}"
+
+        # Accumulate prior thread messages (like the research agent) so the
+        # per-run projection can slice out this run's new messages; otherwise a
+        # demo run on a thread that already has runs projects to zero messages.
+        previous_values = previous.values if isinstance(previous.values, dict) else {}
+        prior_messages = previous_values.get("messages")
+        prior_messages = prior_messages if isinstance(prior_messages, list) else []
+
+        user = human_message(input_text(input_value), f"deep-user-input-{rt}")
         logger.info("fixture.run.input_prepared thread_id=%s run_id=%s content_length=%s", run.thread_id, run.run_id, len(user["content"]))
         task_calls = [
             {
@@ -117,7 +130,7 @@ class DeepAgentDemoRunner:
                     "description": "Search the web for protocol risks",
                     "subagent_type": "researcher",
                 },
-                "id": "task-1",
+                "id": task1,
                 "type": "tool_call",
             },
             {
@@ -126,16 +139,16 @@ class DeepAgentDemoRunner:
                     "description": "Inspect the sample dataset",
                     "subagent_type": "data-analyst",
                 },
-                "id": "task-2",
+                "id": task2,
                 "type": "tool_call",
             },
         ]
         orchestrator_call = ai_message(
             "",
-            "deep-orchestrator-tool-call",
+            f"deep-orchestrator-tool-call-{rt}",
             task_calls,
         )
-        root_messages = [user, orchestrator_call]
+        root_messages = [*prior_messages, user, orchestrator_call]
         step = await self._commit_state(
             run,
             previous,
@@ -152,17 +165,17 @@ class DeepAgentDemoRunner:
             {"todos": DUMMY_TODOS_PLANNED, "run_id": run.run_id},
         )
 
-        await self._start_task_tool(run.thread_id, "task-1", task_calls[0]["args"])
-        await self._start_task_tool(run.thread_id, "task-2", task_calls[1]["args"])
+        await self._start_task_tool(run.thread_id, task1, task_calls[0]["args"])
+        await self._start_task_tool(run.thread_id, task2, task_calls[1]["args"])
 
         logger.info("fixture.run.subagents.schedule thread_id=%s run_id=%s count=2", run.thread_id, run.run_id)
         researcher_task = asyncio.create_task(
             self._run_subagent(
                 run,
-                namespace=["tools:task-1"],
+                namespace=[f"tools:{task1}"],
                 subagent_name="researcher",
                 task_description="Search the web for protocol risks",
-                tool_call_id="search-1",
+                tool_call_id=f"search-{rt}",
                 tool_name="search_web",
                 tool_input={"query": "protocol risks"},
                 tool_output={
@@ -177,10 +190,10 @@ class DeepAgentDemoRunner:
         analyst_task = asyncio.create_task(
             self._run_subagent(
                 run,
-                namespace=["tools:task-2"],
+                namespace=[f"tools:{task2}"],
                 subagent_name="data-analyst",
                 task_description="Inspect the sample dataset",
-                tool_call_id="query-1",
+                tool_call_id=f"query-{rt}",
                 tool_name="query_database",
                 tool_input={"table": "sample_data"},
                 tool_output={"rows": [{"id": 1}, {"id": 2}], "count": 2},
@@ -193,18 +206,19 @@ class DeepAgentDemoRunner:
         )
         logger.info("fixture.run.subagents.complete thread_id=%s run_id=%s", run.thread_id, run.run_id)
 
-        await self._finish_task_tool(run.thread_id, "task-1", researcher_output)
-        await self._finish_task_tool(run.thread_id, "task-2", analyst_output)
+        await self._finish_task_tool(run.thread_id, task1, researcher_output)
+        await self._finish_task_tool(run.thread_id, task2, analyst_output)
 
         final = ai_message(
             "Both subagents completed their tasks successfully.",
-            "deep-orchestrator-final",
+            f"deep-orchestrator-final-{rt}",
         )
         root_messages = [
+            *prior_messages,
             user,
             orchestrator_call,
-            tool_message(researcher_output, "task-1", "task-1-result"),
-            tool_message(analyst_output, "task-2", "task-2-result"),
+            tool_message(researcher_output, task1, f"task-1-result-{rt}"),
+            tool_message(analyst_output, task2, f"task-2-result-{rt}"),
             final,
         ]
         current = (await self.repo.get_thread(run.thread_id)).state  # type: ignore[union-attr]
@@ -224,7 +238,7 @@ class DeepAgentDemoRunner:
             thread_id=run.thread_id,
             namespace=[],
             node="model:orchestrator",
-            message_id="deep-orchestrator-final",
+            message_id=f"deep-orchestrator-final-{rt}",
             text=final["content"],
         )
 
