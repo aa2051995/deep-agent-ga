@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from copy import deepcopy
 from typing import Any
 
@@ -10,6 +11,18 @@ from .projections import build_run_snapshot
 from .store import Repository
 
 logger = logging.getLogger("stream_backend.fixture")
+
+
+def _fixture_delays() -> tuple[float, float]:
+    """(per-token, per-step) streaming delays in seconds, so the dummy agent
+    streams like a real one instead of bursting. Tests set both to 0."""
+    def _read(name: str, default: str) -> float:
+        try:
+            return max(float(os.getenv(name, default)), 0.0)
+        except ValueError:
+            return float(default)
+
+    return _read("STREAM_BACKEND_FIXTURE_TOKEN_DELAY", "0.05"), _read("STREAM_BACKEND_FIXTURE_STEP_DELAY", "0.4")
 
 # Deterministic todos the dummy agent streams (mirrors the real agent's plan
 # panel) so the UI can be exercised without any LLM calls.
@@ -143,12 +156,17 @@ class DeepAgentDemoRunner:
                 "type": "tool_call",
             },
         ]
+        planning_text = (
+            "I'll break this into two parallel research tasks — a web search for protocol "
+            "risks and an inspection of the sample dataset — then synthesize the findings."
+        )
+        planning = ai_message(planning_text, f"deep-orchestrator-plan-{rt}")
         orchestrator_call = ai_message(
             "",
             f"deep-orchestrator-tool-call-{rt}",
             task_calls,
         )
-        root_messages = [*prior_messages, user, orchestrator_call]
+        root_messages = [*prior_messages, user, planning, orchestrator_call]
         step = await self._commit_state(
             run,
             previous,
@@ -158,14 +176,30 @@ class DeepAgentDemoRunner:
         )
         logger.info("fixture.run.root_state_committed thread_id=%s run_id=%s step=%s", run.thread_id, run.run_id, step)
 
+        _, step_delay = _fixture_delays()
+
+        # Stream the orchestrator's planning/reasoning tokens (root model stream).
+        await self._stream_text_message(
+            thread_id=run.thread_id,
+            namespace=[],
+            node="model:orchestrator",
+            message_id=f"deep-orchestrator-plan-{rt}",
+            text=planning_text,
+            run_id=run.run_id,
+        )
+
         # Mirror the real agent's todo stream so the UI's plan panel is exercised.
         await self.repo.append_event(
             run.thread_id,
             "updates",
             {"todos": DUMMY_TODOS_PLANNED, "run_id": run.run_id},
         )
+        if step_delay:
+            await asyncio.sleep(step_delay)
 
         await self._start_task_tool(run.thread_id, task1, task_calls[0]["args"], run.run_id)
+        if step_delay:
+            await asyncio.sleep(step_delay)
         await self._start_task_tool(run.thread_id, task2, task_calls[1]["args"], run.run_id)
 
         logger.info("fixture.run.subagents.schedule thread_id=%s run_id=%s count=2", run.thread_id, run.run_id)
@@ -216,6 +250,7 @@ class DeepAgentDemoRunner:
         root_messages = [
             *prior_messages,
             user,
+            planning,
             orchestrator_call,
             tool_message(researcher_output, task1, f"task-1-result-{rt}"),
             tool_message(analyst_output, task2, f"task-2-result-{rt}"),
@@ -395,7 +430,9 @@ class DeepAgentDemoRunner:
             next_nodes=["model"],
             namespace=namespace,
         )
-        await asyncio.sleep(0.02)
+        _, step_delay = _fixture_delays()
+        if step_delay:
+            await asyncio.sleep(step_delay)
         logger.info("fixture.subagent.tool_start thread_id=%s run_id=%s subagent=%s tool=%s", run.thread_id, run.run_id, subagent_name, tool_name)
         await self.repo.append_event(
             run.thread_id,
@@ -409,7 +446,8 @@ class DeepAgentDemoRunner:
             },
             namespace=[*namespace, f"tools:{tool_call_id}"],
         )
-        await asyncio.sleep(0.02)
+        if step_delay:
+            await asyncio.sleep(step_delay)
         logger.info("fixture.subagent.tool_finish thread_id=%s run_id=%s subagent=%s tool=%s", run.thread_id, run.run_id, subagent_name, tool_name)
         await self.repo.append_event(
             run.thread_id,
@@ -498,18 +536,14 @@ class DeepAgentDemoRunner:
             namespace=namespace,
             node=node,
         )
-        for chunk in [text[: max(1, len(text) // 2)], text[max(1, len(text) // 2) :]]:
-            if not chunk:
-                continue
-            await asyncio.sleep(0.01)
-            logger.debug(
-                "fixture.message.delta thread_id=%s message_id=%s node=%s namespace=%s chunk_length=%s",
-                thread_id,
-                message_id,
-                node,
-                namespace,
-                len(chunk),
-            )
+        token_delay, _ = _fixture_delays()
+        # Stream word-by-word (like real token streaming) so the UI renders text
+        # progressively instead of in one burst.
+        words = text.split(" ")
+        for index, word in enumerate(words):
+            chunk = word if index == 0 else " " + word
+            if token_delay:
+                await asyncio.sleep(token_delay)
             await self.repo.append_event(
                 thread_id,
                 "messages",

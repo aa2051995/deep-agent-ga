@@ -257,6 +257,11 @@ export STREAM_BACKEND_TEST_AGENT=true            # simple on/off: truthy -> dumm
 export STREAM_BACKEND_AGENT_MODE=testing         # testing|fixture -> dummy
 # export STREAM_BACKEND_AGENT_MODE=live          # live|research   -> real LLM (strict)
 # export STREAM_BACKEND_AGENT_MODE=auto          # real LLM, falling back to dummy (default)
+
+# Dummy agent streaming pace (seconds) — it streams word-by-word with delays so
+# the UI shows progressive streaming like the real agent. Lower for faster demos.
+export STREAM_BACKEND_FIXTURE_TOKEN_DELAY=0.05   # delay per streamed word
+export STREAM_BACKEND_FIXTURE_STEP_DELAY=0.4     # delay between phases (planning/tools/subagents)
 ```
 
 ### Worker Command Options
