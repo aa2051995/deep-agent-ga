@@ -101,30 +101,30 @@ class PostgresRepository:
                 )
                 """
             )
-            # One-time migration: move an existing history column out of
-            # stream_threads into stream_thread_history, then drop it. Idempotent
-            # (guarded on the column still existing).
-            has_history_col = await (
-                await conn.execute(
-                    """
-                    SELECT 1 FROM information_schema.columns
-                    WHERE table_name = 'stream_threads' AND column_name = 'history'
-                    """
-                )
-            ).fetchone()
-            if has_history_col:
-                migrate_start = time.perf_counter()
-                logger.info("store.migrate.thread_history.start")
-                await conn.execute(
-                    """
-                    INSERT INTO stream_thread_history (thread_id, updated_at, history)
-                    SELECT thread_id, updated_at, history FROM stream_threads
-                    ON CONFLICT (thread_id) DO NOTHING
-                    """
-                )
-                await conn.execute("ALTER TABLE stream_threads DROP COLUMN IF EXISTS history")
+            # Migrate history out of stream_threads into stream_thread_history.
+            # Non-destructive (expand-contract): we KEEP the legacy `history`
+            # column but make it optional, so a still-running old process that
+            # SELECTs it (rolling restart / version skew) does not crash. New code
+            # ignores the column; history lives in stream_thread_history. The
+            # column can be dropped in a later cleanup once all processes are new.
+            migrate_start = time.perf_counter()
+            await conn.execute(
+                "ALTER TABLE stream_threads ADD COLUMN IF NOT EXISTS history JSONB DEFAULT '[]'"
+            )
+            await conn.execute("ALTER TABLE stream_threads ALTER COLUMN history DROP NOT NULL")
+            await conn.execute("ALTER TABLE stream_threads ALTER COLUMN history SET DEFAULT '[]'")
+            migrated = await conn.execute(
+                """
+                INSERT INTO stream_thread_history (thread_id, updated_at, history)
+                SELECT thread_id, updated_at, history FROM stream_threads
+                WHERE history IS NOT NULL AND history <> '[]'::jsonb
+                ON CONFLICT (thread_id) DO NOTHING
+                """
+            )
+            if migrated.rowcount and migrated.rowcount > 0:
                 logger.info(
-                    "store.migrate.thread_history.complete elapsed_ms=%.1f",
+                    "store.migrate.thread_history rows=%s elapsed_ms=%.1f",
+                    migrated.rowcount,
                     (time.perf_counter() - migrate_start) * 1000,
                 )
             await conn.execute(
