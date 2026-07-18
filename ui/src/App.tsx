@@ -579,6 +579,10 @@ export function App() {
   const threadIdRef = useRef<string | null>(threadId);
   const threadRequestSeqRef = useRef(0);
   const handledTerminalRunIdsRef = useRef(new Set<string>());
+  // Run ids whose checkpoint snapshot is currently being fetched by E10, so a
+  // re-run (triggered by `runs` churn from refreshRuns polling) does not kick off
+  // a duplicate fetch and does not abort the in-flight one.
+  const snapshotFetchInFlight = useRef(new Set<string>());
   const pendingThreadTitleRef = useRef("New research");
   const loggedMessageTextRef = useRef(new Map<string, string>());
   const messagesViewportRef = useRef<HTMLDivElement | null>(null);
@@ -676,6 +680,24 @@ export function App() {
     : null;
   const currentRunStatus = currentRun?.status ?? null;
   const currentRunSnapshotLoaded = currentRunId ? Boolean(runCheckpointSnapshots[currentRunId]) : false;
+  // Which finished runs still need a checkpoint snapshot (lazy window + the run
+  // being viewed). Memoized so E10 can key off a STABLE signature instead of the
+  // `runs` array identity, which refreshRuns replaces on every poll.
+  const runsToHydrate = useMemo(
+    () =>
+      selectRunsToHydrate(
+        runsInMessageOrder,
+        runCheckpointSnapshots,
+        hydratedRunLimit,
+        PERSISTED_RUN_STATUSES,
+        currentRunId,
+      ),
+    [runsInMessageOrder, runCheckpointSnapshots, hydratedRunLimit, currentRunId],
+  );
+  const runsToHydrateKey = useMemo(
+    () => runsToHydrate.map((run) => run.runId).sort().join(","),
+    [runsToHydrate],
+  );
   const persistedMessageEntries = useMemo(
     () => messageEntriesFromCheckpointSnapshots(runsInMessageOrder, runCheckpointSnapshots),
     [runCheckpointSnapshots, runsInMessageOrder],
@@ -864,6 +886,7 @@ export function App() {
     setRunCheckpointSnapshots({});
     setHydratedRunLimit(INITIAL_HYDRATED_RUN_LIMIT);
     loggedMessageTextRef.current.clear();
+    snapshotFetchInFlight.current.clear();
     stream.clearDebugEvents();
     joinedRunIds.current.clear();
     stream.switchThread(nextThreadId);
@@ -1247,38 +1270,37 @@ export function App() {
     }
     const requestThreadId = threadId;
     const requestSeq = threadRequestSeqRef.current;
-    // Lazy hydration: only fetch snapshots for the newest window of finished
-    // runs (plus the run being viewed), not every finished run on the thread.
-    const missingRuns = selectRunsToHydrate(
-      runsInMessageOrder,
-      runCheckpointSnapshots,
-      hydratedRunLimit,
-      PERSISTED_RUN_STATUSES,
-      currentRunId,
+    const isStale = (): boolean =>
+      threadIdRef.current !== requestThreadId || requestSeq !== threadRequestSeqRef.current;
+
+    // Only start fetches for runs that are neither already loaded nor in flight.
+    // This makes E10 idempotent under `runs` churn: refreshRuns polling replaces
+    // the runs array every second, and previously that aborted the in-flight
+    // snapshot fetch (via the effect-cleanup AbortController) before it could
+    // land — so the current run's snapshot never loaded, the live->persisted
+    // handoff never fired, and the transcript needed a manual reload. We now
+    // dedupe via a ref and DO NOT abort; the thread/seq staleness check drops
+    // any result that arrives after a thread switch.
+    const toFetch = runsToHydrate.filter(
+      (run) => !runCheckpointSnapshots[run.runId] && !snapshotFetchInFlight.current.has(run.runId),
     );
-    if (missingRuns.length === 0) {
+    if (toFetch.length === 0) {
       return undefined;
     }
-    let cancelled = false;
-    const controller = new AbortController();
-    const isStale = (): boolean =>
-      cancelled ||
-      controller.signal.aborted ||
-      threadIdRef.current !== requestThreadId ||
-      requestSeq !== threadRequestSeqRef.current;
-
     logger.info("runs.checkpoints.load.start", {
       threadId: requestThreadId,
-      count: missingRuns.length,
+      count: toFetch.length,
       hydratedRunLimit,
     });
-
+    for (const run of toFetch) {
+      snapshotFetchInFlight.current.add(run.runId);
+    }
     // Fetch each run independently and apply as it resolves, so one slow or
     // failing run never blocks hydration of the others (unlike Promise.all).
     void Promise.allSettled(
-      missingRuns.map(async (run) => {
+      toFetch.map(async (run) => {
         try {
-          const snapshot = await getRunCheckpointSnapshot(apiUrl, run.threadId, run.runId, controller.signal);
+          const snapshot = await getRunCheckpointSnapshot(apiUrl, run.threadId, run.runId);
           if (isStale() || snapshot.run.threadId !== requestThreadId) {
             return;
           }
@@ -1286,12 +1308,7 @@ export function App() {
             current[run.runId] ? current : { ...current, [run.runId]: snapshot },
           );
         } catch (caught) {
-          if (
-            cancelled ||
-            controller.signal.aborted ||
-            (caught instanceof DOMException && caught.name === "AbortError")
-          ) {
-            logger.debug("runs.checkpoints.load.aborted", { threadId: requestThreadId, runId: run.runId });
+          if (isStale()) {
             return;
           }
           logger.error("runs.checkpoints.load.failed", {
@@ -1299,17 +1316,17 @@ export function App() {
             runId: run.runId,
             message: caught instanceof Error ? caught.message : String(caught),
           });
-          if (threadIdRef.current === requestThreadId && requestSeq === threadRequestSeqRef.current) {
-            setError(caught instanceof Error ? caught.message : "Unable to load run checkpoints.");
-          }
+          setError(caught instanceof Error ? caught.message : "Unable to load run checkpoints.");
+        } finally {
+          snapshotFetchInFlight.current.delete(run.runId);
         }
       }),
     );
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [apiUrl, currentRunId, hydratedRunLimit, runCheckpointSnapshots, runs, runsInMessageOrder, threadId]);
+    return undefined;
+    // Keyed on the stable set of runs-to-hydrate (runsToHydrateKey), NOT the
+    // `runs` array identity, so refreshRuns polling does not re-trigger/abort.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiUrl, threadId, runsToHydrateKey]);
 //E11
   useEffect(() => {
     const handlePopState = (): void => {
@@ -1324,6 +1341,7 @@ export function App() {
       setCurrentRunId(null);
       setRunCheckpointSnapshots({});
       setHydratedRunLimit(INITIAL_HYDRATED_RUN_LIMIT);
+      snapshotFetchInFlight.current.clear();
       stream.clearDebugEvents();
       joinedRunIds.current.clear();
       switchThreadRef.current?.(nextThreadId);
