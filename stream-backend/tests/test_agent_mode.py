@@ -106,6 +106,35 @@ async def test_dummy_agent_subagents_stream_multiple_tools_and_reasoning():
 
 
 @pytest.mark.asyncio
+async def test_dummy_agent_persists_snapshot_before_marking_success():
+    # The run must not be flipped to `success` before its snapshot row exists.
+    # Otherwise refreshRuns polling sees success during the (~1s) get_history
+    # window, the UI fetches an empty snapshot and caches it, and the completed
+    # run never renders without a manual reload.
+    calls: list[tuple[str, str | None]] = []
+
+    class SpyRepo(InMemoryRepository):
+        async def save_run(self, run):  # type: ignore[override]
+            calls.append(("save_run", run.status))
+            return await super().save_run(run)
+
+        async def save_run_snapshot(self, snapshot):  # type: ignore[override]
+            calls.append(("save_snapshot", None))
+            return await super().save_run_snapshot(snapshot)
+
+    repo = SpyRepo()
+    await repo.ensure_thread("t1", "assistant")
+    run = RunRecord(run_id="r1", thread_id="t1", assistant_id="assistant")
+    await repo.create_run(run)
+
+    await DeepAgentDemoRunner(repo).run(run, "demo")
+
+    snap_idx = next(i for i, c in enumerate(calls) if c[0] == "save_snapshot")
+    success_idx = next(i for i, c in enumerate(calls) if c == ("save_run", "success"))
+    assert snap_idx < success_idx, f"snapshot must be saved before success: {calls}"
+
+
+@pytest.mark.asyncio
 async def test_dummy_agent_never_leaves_a_breakpoint_next():
     # The LangGraph SDK's useStream synthesizes a spurious "human input" breakpoint
     # interrupt whenever the thread-head checkpoint has a non-empty `next`. The

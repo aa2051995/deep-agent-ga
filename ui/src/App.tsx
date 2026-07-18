@@ -583,6 +583,12 @@ export function App() {
   // re-run (triggered by `runs` churn from refreshRuns polling) does not kick off
   // a duplicate fetch and does not abort the in-flight one.
   const snapshotFetchInFlight = useRef(new Set<string>());
+  // Monotonic ordering for refreshRuns so an older in-flight run-list response
+  // cannot overwrite a newer one (which flipped a completed run's status back to
+  // `running`). Each call takes an id; a response only applies if no newer
+  // response has already been applied.
+  const runsRequestCounterRef = useRef(0);
+  const runsAppliedCounterRef = useRef(0);
   const pendingThreadTitleRef = useRef("New research");
   const loggedMessageTextRef = useRef(new Map<string, string>());
   const messagesViewportRef = useRef<HTMLDivElement | null>(null);
@@ -837,6 +843,7 @@ export function App() {
     options: { requestSeq?: number; signal?: AbortSignal } = {},
   ): Promise<void> {
     const requestSeq = options.requestSeq ?? threadRequestSeqRef.current;
+    const callId = (runsRequestCounterRef.current += 1);
     if (!nextThreadId) {
       if (threadIdRef.current === null && requestSeq === threadRequestSeqRef.current) {
         setRuns([]);
@@ -858,6 +865,13 @@ export function App() {
         });
         return;
       }
+      if (callId < runsAppliedCounterRef.current) {
+        // A newer refreshRuns response already applied; ignore this stale one so
+        // it cannot flip a completed run's status back to an earlier value.
+        logger.info("runs.refresh.ignored.stale", { threadId: nextThreadId, callId, applied: runsAppliedCounterRef.current });
+        return;
+      }
+      runsAppliedCounterRef.current = callId;
       setRuns(next);
       logger.info("runs.refresh.complete", { threadId: nextThreadId, count: next.length });
     } catch (caught) {

@@ -339,9 +339,14 @@ class DeepAgentDemoRunner:
             run_id=run.run_id,
         )
 
+        # Persist the snapshot BEFORE flipping the run to success. Otherwise the
+        # ~1s get_history in _persist_run_snapshot opens a window where the run is
+        # already `success` (visible to refreshRuns polling) but the snapshot row
+        # does not exist yet; the UI then fetches an empty snapshot and caches it,
+        # so the completed run never renders (needs a manual reload).
+        await self._persist_run_snapshot(run)
         run.status = "success"
         await self.repo.save_run(run)
-        await self._persist_run_snapshot(run)
         await self.repo.append_event(
             run.thread_id,
             "lifecycle",
@@ -394,9 +399,11 @@ class DeepAgentDemoRunner:
             text=answer_text,
             run_id=run.run_id,
         )
+        # Snapshot before success — see the note in run(); avoids the UI caching
+        # an empty snapshot fetched during the get_history window.
+        await self._persist_run_snapshot(run)
         run.status = "success"
         await self.repo.save_run(run)
-        await self._persist_run_snapshot(run)
         await self.repo.append_event(
             run.thread_id,
             "lifecycle",
