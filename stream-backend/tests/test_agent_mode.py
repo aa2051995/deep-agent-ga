@@ -73,6 +73,39 @@ async def test_dummy_agent_streams_todos_and_two_subagents():
 
 
 @pytest.mark.asyncio
+async def test_dummy_agent_subagents_stream_multiple_tools_and_reasoning():
+    # The fixture must emit a rich, progressive stream (reasoning messages + several
+    # tool calls per subagent) so the UI's subagent cards stream like a real agent
+    # instead of a single burst.
+    repo = InMemoryRepository()
+    await repo.ensure_thread("t1", "assistant")
+    run = RunRecord(run_id="r1", thread_id="t1", assistant_id="assistant")
+    await repo.create_run(run)
+
+    await DeepAgentDemoRunner(repo).run(run, "Investigate the protocol")
+
+    events = await repo.list_events("t1")
+    tool_started = [
+        e for e in events
+        if e.method == "tools" and isinstance(e.params.data, dict)
+        and e.params.data.get("event") == "tool-started"
+    ]
+    # 3 tools per subagent (x2) + the 2 orchestrator `task` tool calls.
+    assert len(tool_started) >= 8, f"expected many tool calls, got {len(tool_started)}"
+    tool_names = {e.params.data.get("tool_name") for e in tool_started}
+    assert {"search_web", "query_database", "fetch_page", "profile_columns"} <= tool_names
+
+    message_starts = [
+        e for e in events
+        if e.method == "messages" and isinstance(e.params.data, dict)
+        and e.params.data.get("event") == "message-start"
+    ]
+    # Many streamed reasoning messages (intro + before/after per tool + final),
+    # far more than the old single-message-per-subagent fixture.
+    assert len(message_starts) >= 12, f"expected many streamed messages, got {len(message_starts)}"
+
+
+@pytest.mark.asyncio
 async def test_dummy_agent_never_leaves_a_breakpoint_next():
     # The LangGraph SDK's useStream synthesizes a spurious "human input" breakpoint
     # interrupt whenever the thread-head checkpoint has a non-empty `next`. The

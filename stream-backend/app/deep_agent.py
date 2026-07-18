@@ -22,7 +22,7 @@ def _fixture_delays() -> tuple[float, float]:
         except ValueError:
             return float(default)
 
-    return _read("STREAM_BACKEND_FIXTURE_TOKEN_DELAY", "0.05"), _read("STREAM_BACKEND_FIXTURE_STEP_DELAY", "0.4")
+    return _read("STREAM_BACKEND_FIXTURE_TOKEN_DELAY", "0.06"), _read("STREAM_BACKEND_FIXTURE_STEP_DELAY", "0.9")
 
 # Deterministic todos the dummy agent streams (mirrors the real agent's plan
 # panel) so the UI can be exercised without any LLM calls.
@@ -215,16 +215,46 @@ class DeepAgentDemoRunner:
                 namespace=[f"tools:{task1}"],
                 subagent_name="researcher",
                 task_description="Search the web for protocol risks",
-                tool_call_id=f"search-{rt}",
-                tool_name="search_web",
-                tool_input={"query": "protocol risks"},
-                tool_output={
-                    "results": [
-                        "Reconnect handling must replay buffered events.",
-                        "Lifecycle terminals must not hide trailing values.",
-                    ]
-                },
-                final_text="Research completed: reconnect and lifecycle handling need coverage.",
+                intro_text=(
+                    "Starting the web research. I'll run a few searches to map the "
+                    "protocol's risk surface before summarizing."
+                ),
+                steps=[
+                    {
+                        "tool_call_id": f"search-reconnect-{rt}",
+                        "tool_name": "search_web",
+                        "tool_input": {"query": "streaming protocol reconnect risks"},
+                        "tool_output": {
+                            "results": [
+                                "Reconnect handling must replay buffered events.",
+                                "Clients resume from the last acknowledged event id.",
+                            ]
+                        },
+                        "reasoning_before": "First, let me look at how reconnects are handled.",
+                        "reasoning_after": "Reconnect handling clearly needs buffered-event replay.",
+                    },
+                    {
+                        "tool_call_id": f"search-lifecycle-{rt}",
+                        "tool_name": "search_web",
+                        "tool_input": {"query": "protocol lifecycle terminal events trailing values"},
+                        "tool_output": {
+                            "results": [
+                                "Terminal lifecycle events must not hide trailing values.",
+                                "Consumers expect a final values frame after completion.",
+                            ]
+                        },
+                        "reasoning_before": "Next, I'll check lifecycle terminal semantics.",
+                        "reasoning_after": "Trailing values must survive terminal events.",
+                    },
+                    {
+                        "tool_call_id": f"fetch-spec-{rt}",
+                        "tool_name": "fetch_page",
+                        "tool_input": {"url": "https://spec.example/protocol#streaming"},
+                        "tool_output": {"status": 200, "excerpt": "Buffered replay + trailing values are REQUIRED."},
+                        "reasoning_after": "The spec confirms both concerns are required behaviors.",
+                    },
+                ],
+                final_text="Research completed: reconnect replay and lifecycle trailing-value handling both need coverage.",
             )
         )
         analyst_task = asyncio.create_task(
@@ -233,11 +263,36 @@ class DeepAgentDemoRunner:
                 namespace=[f"tools:{task2}"],
                 subagent_name="data-analyst",
                 task_description="Inspect the sample dataset",
-                tool_call_id=f"query-{rt}",
-                tool_name="query_database",
-                tool_input={"table": "sample_data"},
-                tool_output={"rows": [{"id": 1}, {"id": 2}], "count": 2},
-                final_text="Analysis completed: found 2 sample records.",
+                intro_text=(
+                    "Inspecting the sample dataset. I'll query a couple of tables and "
+                    "profile the rows before reporting."
+                ),
+                steps=[
+                    {
+                        "tool_call_id": f"query-sample-{rt}",
+                        "tool_name": "query_database",
+                        "tool_input": {"table": "sample_data"},
+                        "tool_output": {"rows": [{"id": 1}, {"id": 2}], "count": 2},
+                        "reasoning_before": "Let me start with the sample_data table.",
+                        "reasoning_after": "Two sample records, both well-formed.",
+                    },
+                    {
+                        "tool_call_id": f"query-events-{rt}",
+                        "tool_name": "query_database",
+                        "tool_input": {"table": "event_log", "limit": 100},
+                        "tool_output": {"rows": 42, "distinct_types": 5},
+                        "reasoning_before": "Now checking the event_log for anomalies.",
+                        "reasoning_after": "42 events across 5 types — nothing malformed.",
+                    },
+                    {
+                        "tool_call_id": f"profile-cols-{rt}",
+                        "tool_name": "profile_columns",
+                        "tool_input": {"table": "sample_data"},
+                        "tool_output": {"nulls": 0, "types": {"id": "int"}},
+                        "reasoning_after": "No null columns; schema looks clean.",
+                    },
+                ],
+                final_text="Analysis completed: 2 sample records and a clean 42-row event log.",
             )
         )
         researcher_output, analyst_output = await asyncio.gather(
@@ -459,18 +514,28 @@ class DeepAgentDemoRunner:
         namespace: list[str],
         subagent_name: str,
         task_description: str,
-        tool_call_id: str,
-        tool_name: str,
-        tool_input: dict[str, Any],
-        tool_output: Any,
+        intro_text: str,
+        steps: list[dict[str, Any]],
         final_text: str,
     ) -> str:
+        """Run one subagent that streams reasoning and calls several tools.
+
+        `steps` is a list of tool operations, each a dict with keys:
+        `tool_call_id`, `tool_name`, `tool_input`, `tool_output`, and optional
+        `reasoning_before` / `reasoning_after` (streamed word-by-word). This makes
+        the subagent emit many progressive events (reasoning + multiple tools) so
+        the UI's subagent card streams like a real one instead of a single burst.
+        """
+        node = f"model:{subagent_name}"
+        model_ns = [*namespace, node]
+        rt = run.run_id
         logger.info(
-            "fixture.subagent.start thread_id=%s run_id=%s subagent=%s namespace=%s",
+            "fixture.subagent.start thread_id=%s run_id=%s subagent=%s namespace=%s steps=%s",
             run.thread_id,
             run.run_id,
             subagent_name,
             namespace,
+            len(steps),
         )
         await self.repo.append_event(
             run.thread_id,
@@ -478,7 +543,7 @@ class DeepAgentDemoRunner:
             {"event": "running", "run_id": run.run_id},
             namespace=namespace,
         )
-        messages = [human_message(task_description, f"{subagent_name}-task")]
+        messages: list[dict[str, Any]] = [human_message(task_description, f"{subagent_name}-task-{rt}")]
         thread = await self.repo.get_thread(run.thread_id)
         if thread is None:
             raise RuntimeError("Thread disappeared while running subagent")
@@ -486,51 +551,79 @@ class DeepAgentDemoRunner:
         await self._commit_state(
             run,
             previous,
-            {"messages": messages, "agent": subagent_name},
+            {"messages": list(messages), "agent": subagent_name},
             int(previous.metadata.get("step", 0)) + 1,
-            next_nodes=["model"],
+            next_nodes=[],
             namespace=namespace,
         )
         _, step_delay = _fixture_delays()
-        if step_delay:
-            await asyncio.sleep(step_delay)
-        logger.info("fixture.subagent.tool_start thread_id=%s run_id=%s subagent=%s tool=%s", run.thread_id, run.run_id, subagent_name, tool_name)
-        await self.repo.append_event(
-            run.thread_id,
-            "tools",
-            {
-                "event": "tool-started",
-                "tool_call_id": tool_call_id,
-                "tool_name": tool_name,
-                "input": tool_input,
-                "run_id": run.run_id,
-            },
-            namespace=[*namespace, f"tools:{tool_call_id}"],
-        )
-        if step_delay:
-            await asyncio.sleep(step_delay)
-        logger.info("fixture.subagent.tool_finish thread_id=%s run_id=%s subagent=%s tool=%s", run.thread_id, run.run_id, subagent_name, tool_name)
-        await self.repo.append_event(
-            run.thread_id,
-            "tools",
-            {
-                "event": "tool-finished",
-                "tool_call_id": tool_call_id,
-                "output": tool_output,
-                "run_id": run.run_id,
-            },
-            namespace=[*namespace, f"tools:{tool_call_id}"],
-        )
-        messages.append(tool_message(str(tool_output), tool_call_id, f"{tool_call_id}-result", tool_output))
-        messages.append(ai_message(final_text, f"{subagent_name}-final-{run.run_id}"))
-        await self._stream_text_message(
-            thread_id=run.thread_id,
-            namespace=[*namespace, f"model:{subagent_name}"],
-            node=f"model:{subagent_name}",
-            message_id=f"{subagent_name}-final-{run.run_id}",
-            text=final_text,
-            run_id=run.run_id,
-        )
+
+        async def _stream_reasoning(kind: str, index: int, text: str) -> None:
+            message_id = f"{subagent_name}-{kind}-{index}-{rt}"
+            await self._stream_text_message(
+                thread_id=run.thread_id,
+                namespace=model_ns,
+                node=node,
+                message_id=message_id,
+                text=text,
+                run_id=run.run_id,
+            )
+            messages.append(ai_message(text, message_id))
+
+        # Opening reasoning before any tool call.
+        await _stream_reasoning("intro", 0, intro_text)
+
+        for index, spec in enumerate(steps):
+            tool_call_id = spec["tool_call_id"]
+            tool_ns = [*namespace, f"tools:{tool_call_id}"]
+            before = spec.get("reasoning_before")
+            if before:
+                await _stream_reasoning("before", index, before)
+            logger.info(
+                "fixture.subagent.tool_start thread_id=%s run_id=%s subagent=%s tool=%s",
+                run.thread_id, run.run_id, subagent_name, spec["tool_name"],
+            )
+            await self.repo.append_event(
+                run.thread_id,
+                "tools",
+                {
+                    "event": "tool-started",
+                    "tool_call_id": tool_call_id,
+                    "tool_name": spec["tool_name"],
+                    "input": spec["tool_input"],
+                    "run_id": run.run_id,
+                },
+                namespace=tool_ns,
+            )
+            if step_delay:
+                await asyncio.sleep(step_delay)
+            logger.info(
+                "fixture.subagent.tool_finish thread_id=%s run_id=%s subagent=%s tool=%s",
+                run.thread_id, run.run_id, subagent_name, spec["tool_name"],
+            )
+            await self.repo.append_event(
+                run.thread_id,
+                "tools",
+                {
+                    "event": "tool-finished",
+                    "tool_call_id": tool_call_id,
+                    "output": spec["tool_output"],
+                    "run_id": run.run_id,
+                },
+                namespace=tool_ns,
+            )
+            messages.append(
+                tool_message(str(spec["tool_output"]), tool_call_id, f"{tool_call_id}-result-{rt}", spec["tool_output"])
+            )
+            after = spec.get("reasoning_after")
+            if after:
+                await _stream_reasoning("after", index, after)
+            if step_delay:
+                await asyncio.sleep(step_delay)
+
+        # Closing summary the orchestrator receives as the task tool output.
+        await _stream_reasoning("final", 0, final_text)
+
         thread = await self.repo.get_thread(run.thread_id)
         if thread is None:
             raise RuntimeError("Thread disappeared while committing subagent")
@@ -538,7 +631,7 @@ class DeepAgentDemoRunner:
         await self._commit_state(
             run,
             previous,
-            {"messages": messages, "agent": subagent_name},
+            {"messages": list(messages), "agent": subagent_name},
             int(previous.metadata.get("step", 0)) + 1,
             next_nodes=[],
             namespace=namespace,
