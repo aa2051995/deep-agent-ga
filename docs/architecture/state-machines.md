@@ -47,6 +47,8 @@ stateDiagram-v2
     end note
 ```
 
+> **`running --> error` requires the runner to re-raise.** `ResearchDeepAgentRunner.run()`/`.resume()` catch the exception to record `error` + persist a snapshot + emit `failed`, then re-raise. If they swallowed it (as they once did), `execute_run_direct` would fall through to `update_run_status(..., "success")` and persist the failed run as `success` with no snapshot.
+
 ---
 
 ## 2. Run lifecycle event stream (`lifecycle` channel)

@@ -404,14 +404,28 @@ class ResearchDeepAgentRunner:
         config = raw_config if isinstance(raw_config, dict) else {}
         configurable = config.get("configurable")
         configurable = configurable if isinstance(configurable, dict) else {}
-        return {
+        merged: dict[str, Any] = {
             **config,
             "configurable": {
                 **configurable,
                 "thread_id": run.thread_id,
                 "checkpoint_ns": configurable.get("checkpoint_ns", ""),
-            }
+            },
         }
+        # A deep research run fans out into subagents and can legitimately need
+        # more than LangGraph's default of 25 super-steps. Let operators raise
+        # the ceiling via env without hard-coding it, and honour an explicit
+        # recursion_limit already present in the caller's config.
+        if "recursion_limit" not in merged:
+            env_limit = os.getenv("LANGGRAPH_RECURSION_LIMIT")
+            if env_limit:
+                try:
+                    merged["recursion_limit"] = int(env_limit)
+                except ValueError:
+                    logger.warning(
+                        "research.run.invalid_recursion_limit value=%s", env_limit
+                    )
+        return merged
 
     async def resume(self, run: RunRecord, resume_value: Any = None) -> None:
         logger.info(
@@ -463,8 +477,8 @@ class ResearchDeepAgentRunner:
             )
             await self._save_final_snapshot(run, agent, config, final_text)
             run.status = "success"
-            await self.repo.save_run(run)
             await self._persist_run_snapshot(run)
+            await self.repo.save_run(run)
             await self.repo.append_event(
                 run.thread_id,
                 "lifecycle",
@@ -474,12 +488,17 @@ class ResearchDeepAgentRunner:
         except Exception as exc:
             logger.exception("research.resume.failed thread_id=%s run_id=%s", run.thread_id, run.run_id)
             run.status = "error"
+            run.metadata = {**run.metadata, "error": str(exc)}
+            await self._persist_run_snapshot(run)
             await self.repo.save_run(run)
             await self.repo.append_event(
                 run.thread_id,
                 "lifecycle",
                 {"event": "failed", "run_id": run.run_id, "error": str(exc), "recovered": True},
             )
+            # Re-raise so the worker records the run as failed instead of
+            # falling through to the success path.
+            raise
 
     async def run(self, run: RunRecord, input_value: Any) -> None:
         logger.info("research.run.start thread_id=%s run_id=%s", run.thread_id, run.run_id)
@@ -553,8 +572,8 @@ class ResearchDeepAgentRunner:
             )
             await self._save_final_snapshot(run, agent, config, final_text, fallback_messages=messages)
             run.status = "success"
-            await self.repo.save_run(run)
             await self._persist_run_snapshot(run)
+            await self.repo.save_run(run)
             await self.repo.append_event(
                 run.thread_id,
                 "lifecycle",
@@ -564,12 +583,18 @@ class ResearchDeepAgentRunner:
         except Exception as exc:
             logger.exception("research.run.failed thread_id=%s run_id=%s", run.thread_id, run.run_id)
             run.status = "error"
+            run.metadata = {**run.metadata, "error": str(exc)}
+            await self._persist_run_snapshot(run)
             await self.repo.save_run(run)
             await self.repo.append_event(
                 run.thread_id,
                 "lifecycle",
                 {"event": "failed", "run_id": run.run_id, "error": str(exc)},
             )
+            # Re-raise so the worker records the run as failed. Swallowing the
+            # exception here let the caller fall through to marking the run a
+            # success even though it never completed.
+            raise
 
     async def _save_final_snapshot(
         self,
