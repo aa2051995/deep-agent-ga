@@ -16,6 +16,10 @@ from .store import Repository
 
 logger = logging.getLogger("stream_backend.research_runtime")
 
+# LangGraph defaults to 25 super-steps; a deep research run fans out into
+# subagents and can legitimately need more. Overridable via LANGGRAPH_RECURSION_LIMIT.
+DEFAULT_RECURSION_LIMIT = 50
+
 
 class ResearchRuntimeUnavailable(RuntimeError):
     pass
@@ -413,17 +417,20 @@ class ResearchDeepAgentRunner:
             },
         }
         # A deep research run fans out into subagents and can legitimately need
-        # more than LangGraph's default of 25 super-steps. Let operators raise
-        # the ceiling via env without hard-coding it, and honour an explicit
-        # recursion_limit already present in the caller's config.
+        # more than LangGraph's default of 25 super-steps. Default to 50 and let
+        # operators tune it via env, while honouring an explicit recursion_limit
+        # already present in the caller's config.
         if "recursion_limit" not in merged:
+            merged["recursion_limit"] = DEFAULT_RECURSION_LIMIT
             env_limit = os.getenv("LANGGRAPH_RECURSION_LIMIT")
             if env_limit:
                 try:
                     merged["recursion_limit"] = int(env_limit)
                 except ValueError:
                     logger.warning(
-                        "research.run.invalid_recursion_limit value=%s", env_limit
+                        "research.run.invalid_recursion_limit value=%s default=%s",
+                        env_limit,
+                        DEFAULT_RECURSION_LIMIT,
                     )
         return merged
 

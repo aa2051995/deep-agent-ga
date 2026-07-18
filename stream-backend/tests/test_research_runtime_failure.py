@@ -103,6 +103,16 @@ class ResearchRuntimeFailureTests(unittest.TestCase):
         self.assertEqual(len(repo.saved_snapshots), 1)
         self.assertEqual(repo.saved_snapshots[0].status, "error")
 
+    def test_run_config_defaults_recursion_limit_to_50(self) -> None:
+        repo = _FakeRepo()
+        runner = _make_runner(repo)
+        run = _run_record()
+
+        env = {k: v for k, v in os.environ.items() if k != "LANGGRAPH_RECURSION_LIMIT"}
+        with patch.dict(os.environ, env, clear=True):
+            config = runner._run_config(run)
+        self.assertEqual(config["recursion_limit"], 50)
+
     def test_run_config_reads_recursion_limit_from_env(self) -> None:
         repo = _FakeRepo()
         runner = _make_runner(repo)
@@ -112,14 +122,14 @@ class ResearchRuntimeFailureTests(unittest.TestCase):
             config = runner._run_config(run)
         self.assertEqual(config["recursion_limit"], 75)
 
-    def test_run_config_ignores_invalid_recursion_limit(self) -> None:
+    def test_run_config_falls_back_to_default_on_invalid_limit(self) -> None:
         repo = _FakeRepo()
         runner = _make_runner(repo)
         run = _run_record()
 
         with patch.dict(os.environ, {"LANGGRAPH_RECURSION_LIMIT": "not-a-number"}):
             config = runner._run_config(run)
-        self.assertNotIn("recursion_limit", config)
+        self.assertEqual(config["recursion_limit"], 50)
 
     def test_run_config_respects_explicit_recursion_limit(self) -> None:
         repo = _FakeRepo()

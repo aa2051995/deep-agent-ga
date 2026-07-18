@@ -24,8 +24,38 @@ from app.research_runtime import ResearchDeepAgentRunner, ResearchRuntimeUnavail
 from app.runtime import create_publishing_repository
 from app.main import set_env
 from worker.celery_app import celery_app
+
+from pydantic import ValidationError
+
+try:  # pragma: no cover - langgraph is always present in prod
+    from langgraph.errors import GraphRecursionError
+except Exception:  # pragma: no cover
+    GraphRecursionError = None  # type: ignore[assignment]
+
 set_env()  # Ensure environment variables are set for the worker
 logger = logging.getLogger("stream_backend.worker.tasks")
+
+# Errors where retrying re-runs the whole (often multi-minute) agent with an
+# identical outcome — recursion limits, missing config, malformed payloads,
+# programming/data bugs. These are excluded from Celery autoretry: the run is
+# already persisted as `error` by execute_run_direct, so the task logs and
+# stops instead of burning another full run. Everything else (broker/network
+# hiccups, transient infra) still falls through to autoretry.
+DETERMINISTIC_RUN_ERRORS: tuple[type[BaseException], ...] = tuple(
+    exc
+    for exc in (
+        GraphRecursionError,
+        ResearchRuntimeUnavailable,
+        ValidationError,
+        ValueError,
+        TypeError,
+        KeyError,
+        AttributeError,
+        IndexError,
+        NotImplementedError,
+    )
+    if exc is not None
+)
 
 
 class WorkerShutdownManager:
@@ -243,6 +273,13 @@ def run_agent(self: Any, run_record: dict[str, Any], input_value: Any = None) ->
         logger.info("celery.task.run.complete thread_id=%s run_id=%s task_id=%s", thread_id, run_id, self.request.id)
     except asyncio.CancelledError:
         logger.warning("celery.task.run.cancelled thread_id=%s run_id=%s task_id=%s", thread_id, run_id, self.request.id)
+    except DETERMINISTIC_RUN_ERRORS as exc:
+        # Deterministic failure: a retry would produce the same result. The run
+        # is already recorded as error; swallow so autoretry does not fire.
+        logger.error(
+            "celery.task.run.non_retryable thread_id=%s run_id=%s task_id=%s error_type=%s error=%s",
+            thread_id, run_id, self.request.id, type(exc).__name__, exc,
+        )
     except Exception:
         logger.exception("celery.task.run.error thread_id=%s run_id=%s task_id=%s", thread_id, run_id, self.request.id)
         raise
@@ -269,6 +306,13 @@ def resume_agent(self: Any, run_record: dict[str, Any], resume_value: Any = None
         logger.info("celery.task.resume.complete thread_id=%s run_id=%s task_id=%s", thread_id, run_id, self.request.id)
     except asyncio.CancelledError:
         logger.warning("celery.task.resume.cancelled thread_id=%s run_id=%s task_id=%s", thread_id, run_id, self.request.id)
+    except DETERMINISTIC_RUN_ERRORS as exc:
+        # Deterministic failure: a retry would produce the same result. The run
+        # is already recorded as error; swallow so autoretry does not fire.
+        logger.error(
+            "celery.task.resume.non_retryable thread_id=%s run_id=%s task_id=%s error_type=%s error=%s",
+            thread_id, run_id, self.request.id, type(exc).__name__, exc,
+        )
     except Exception:
         logger.exception("celery.task.resume.error thread_id=%s run_id=%s task_id=%s", thread_id, run_id, self.request.id)
         raise
