@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { liveRunMessages } from "./messageMerge";
+import { dedupeEntriesByKey, liveRunMessages } from "./messageMerge";
 
 type Msg = { id?: string; type: string; text: string };
 
@@ -42,5 +42,53 @@ describe("liveRunMessages", () => {
     // Boundary is the last-matching persisted message (index 2, the repeat h1),
     // and the trailing filter still drops anything matching persisted.
     expect(liveRunMessages(visible, persisted, isSame)).toEqual([ai("a2", "B")]);
+  });
+});
+
+type Entry = { runId: string | null; message: Msg };
+const entry = (runId: string | null, message: Msg): Entry => ({ runId, message });
+
+// Mirrors App.tsx: key `${runId}:${id}`, or null for id-less entries (index-keyed).
+const keyOf = (e: Entry): string | null =>
+  e.message.id ? `${e.runId ?? "none"}:${e.message.id}` : null;
+const scoreOf = (e: Entry): number => e.message.text.length;
+
+describe("dedupeEntriesByKey", () => {
+  it("collapses same runId + same id, keeping the richer copy in the first position", () => {
+    const plan = "deep-orchestrator-plan-f45a1c99";
+    const entries = [
+      entry("f45a1c99", h("h1", "question")),
+      entry("f45a1c99", ai(plan, "Plan")), // partial streamed chunk
+      entry("f45a1c99", ai(plan, "Plan: step 1, step 2")), // final, longer
+    ];
+    expect(dedupeEntriesByKey(entries, keyOf, scoreOf)).toEqual([
+      entry("f45a1c99", h("h1", "question")),
+      entry("f45a1c99", ai(plan, "Plan: step 1, step 2")),
+    ]);
+  });
+
+  it("keeps the same id under different runIds (keys differ)", () => {
+    const entries = [entry("runA", ai("m1", "x")), entry("runB", ai("m1", "y"))];
+    expect(dedupeEntriesByKey(entries, keyOf, scoreOf)).toHaveLength(2);
+  });
+
+  it("never collapses id-less entries (they are index-keyed at render)", () => {
+    const entries = [
+      entry("runA", { type: "ai", text: "a" }),
+      entry("runA", { type: "ai", text: "a" }),
+    ];
+    expect(dedupeEntriesByKey(entries, keyOf, scoreOf)).toHaveLength(2);
+  });
+
+  it("preserves order and first-seen position of the winner", () => {
+    const entries = [
+      entry("r", ai("dup", "short")),
+      entry("r", h("h2", "later")),
+      entry("r", ai("dup", "much longer content")),
+    ];
+    expect(dedupeEntriesByKey(entries, keyOf, scoreOf)).toEqual([
+      entry("r", ai("dup", "much longer content")),
+      entry("r", h("h2", "later")),
+    ]);
   });
 });
