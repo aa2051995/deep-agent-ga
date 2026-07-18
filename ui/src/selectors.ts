@@ -141,7 +141,7 @@ export function subagentStreamToCard(subagent: SubagentStreamInterface): Subagen
 
 export function selectInputRequests(stream: DeepResearchStream): InputRequest[] {
   const requests = (stream.interrupts ?? []).map((interrupt, index) => inputRequestFromInterrupt(interrupt, index));
-  logger.debug("selector.inputRequests", { requests: requests.length });
+  // logger.debug("selector.inputRequests", { requests: requests.length });
   return requests;
 }
 

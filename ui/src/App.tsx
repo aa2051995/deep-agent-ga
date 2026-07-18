@@ -1,5 +1,4 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { flushSync } from "react-dom";
 import {
   Check,
   CircleStop,
@@ -20,8 +19,8 @@ import { deleteThread, getRunCheckpointSnapshot, listRuns, listThreads, renameTh
 import { DEFAULT_API_URL, messageText, useDeepResearchStream } from "./stream";
 import type { DebugEvent, DeepResearchStream } from "./stream";
 import { selectInputRequests, subagentStreamToCard } from "./selectors";
-import { hasEarlierUnhydratedRuns, selectRunsToHydrate, shouldHandoffLiveToPersisted } from "./runHydration";
-import { liveRunMessages } from "./messageMerge";
+import { hasEarlierUnhydratedRuns, selectRunsToHydrate } from "./runHydration";
+import { dedupeEntriesByKey, liveRunMessages, sameMessageIdentity } from "./messageMerge";
 import type { InputRequest, ProtocolEvent, RunCheckpointSnapshot, RunSummary, SubagentCard, ThreadSummary } from "./types";
 
 const CURRENT_THREAD_KEY = "deep-research-ui:current-thread";
@@ -70,7 +69,7 @@ const TERMINAL_EVENT_TO_RUN_STATUS: Record<string, string> = {
 const PERSISTED_RUN_STATUSES = new Set(["success", "error", "interrupted", "timeout"]);
 // Lazy hydration: how many of the newest finished runs to load checkpoint
 // snapshots for on open, and how many more to reveal per "Load earlier runs".
-const INITIAL_HYDRATED_RUN_LIMIT = 3;
+const INITIAL_HYDRATED_RUN_LIMIT = 7;
 const EARLIER_RUNS_BATCH = 5;
 
 function threadIdFromUrl(): string | null {
@@ -213,10 +212,10 @@ function messageEntriesFromCheckpointSnapshots(
 }
 
 function sameMessage(left: Message, right: Message): boolean {
-  if (left.id && right.id && left.id === right.id) {
-    return true;
-  }
-  return left.type === right.type && messageText(left) === messageText(right);
+  // Stable ids are authoritative; content is only a fallback for optimistic /
+  // un-id'd messages. Two different-id messages with identical text (e.g. the
+  // fixture streaming the same plan every run) are NOT the same message.
+  return sameMessageIdentity(left, right, (message) => message.id, (message) => message.type, messageText);
 }
 
 function isNearBottom(element: HTMLElement, threshold = 96): boolean {
@@ -481,11 +480,11 @@ function subagentCardsForLiveRun(
   const eventCards = subagentCardsFromEvents(protocolEventsFromDebugEvents(runEvents));
   const cards = new Map(eventCards.map((card) => [card.key.replace(/^tools:/, ""), card]));
   if (runId !== null) {
-    logger.token("subagentCardsForLiveRun", {
-      runId,
-      eventCards: eventCards.length,
-      subagents: subagents.size,
-    });
+    // logger.token("subagentCardsForLiveRun", {
+    //   runId,
+    //   eventCards: eventCards.length,
+    //   subagents: subagents.size,
+    // });
   }
   for (const [id, subagent] of subagents) {
     const key = id.replace(/^tools:/, "");
@@ -579,23 +578,13 @@ export function App() {
   const threadIdRef = useRef<string | null>(threadId);
   const threadRequestSeqRef = useRef(0);
   const handledTerminalRunIdsRef = useRef(new Set<string>());
-  // Run ids whose checkpoint snapshot is currently being fetched by E10, so a
-  // re-run (triggered by `runs` churn from refreshRuns polling) does not kick off
-  // a duplicate fetch and does not abort the in-flight one.
-  const snapshotFetchInFlight = useRef(new Set<string>());
-  // Monotonic ordering for refreshRuns so an older in-flight run-list response
-  // cannot overwrite a newer one (which flipped a completed run's status back to
-  // `running`). Each call takes an id; a response only applies if no newer
-  // response has already been applied.
-  const runsRequestCounterRef = useRef(0);
-  const runsAppliedCounterRef = useRef(0);
   const pendingThreadTitleRef = useRef("New research");
   const loggedMessageTextRef = useRef(new Map<string, string>());
   const messagesViewportRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const switchThreadRef = useRef<DeepResearchStream["switchThread"] | null>(null);
-  logger.debug("app.render", { threadId, apiUrl });
+  // logger.debug("app.render", { threadId, apiUrl });
 
   const stream = useDeepResearchStream(
     apiUrl,
@@ -686,24 +675,6 @@ export function App() {
     : null;
   const currentRunStatus = currentRun?.status ?? null;
   const currentRunSnapshotLoaded = currentRunId ? Boolean(runCheckpointSnapshots[currentRunId]) : false;
-  // Which finished runs still need a checkpoint snapshot (lazy window + the run
-  // being viewed). Memoized so E10 can key off a STABLE signature instead of the
-  // `runs` array identity, which refreshRuns replaces on every poll.
-  const runsToHydrate = useMemo(
-    () =>
-      selectRunsToHydrate(
-        runsInMessageOrder,
-        runCheckpointSnapshots,
-        hydratedRunLimit,
-        PERSISTED_RUN_STATUSES,
-        currentRunId,
-      ),
-    [runsInMessageOrder, runCheckpointSnapshots, hydratedRunLimit, currentRunId],
-  );
-  const runsToHydrateKey = useMemo(
-    () => runsToHydrate.map((run) => run.runId).sort().join(","),
-    [runsToHydrate],
-  );
   const persistedMessageEntries = useMemo(
     () => messageEntriesFromCheckpointSnapshots(runsInMessageOrder, runCheckpointSnapshots),
     [runCheckpointSnapshots, runsInMessageOrder],
@@ -734,10 +705,18 @@ export function App() {
           sameMessage(message, optimistic),
         ),
     );
-    return [
+    const combined = [
       ...confirmed,
       ...pending.map((message) => ({ message, runId: currentRunId })),
     ];
+    // Collapse entries that would collide on the render key `${runId}:${id}` (the
+    // live stream can carry the same synthetic message id twice), keeping the
+    // richer copy so streamed messages render once and still grow.
+    return dedupeEntriesByKey(
+      combined,
+      (entry) => (entry.message.id ? `${entry.runId ?? "none"}:${entry.message.id}` : null),
+      (entry) => messageText(entry.message).length,
+    );
   }, [
     currentRunId,
     currentRunSnapshotLoaded,
@@ -843,7 +822,6 @@ export function App() {
     options: { requestSeq?: number; signal?: AbortSignal } = {},
   ): Promise<void> {
     const requestSeq = options.requestSeq ?? threadRequestSeqRef.current;
-    const callId = (runsRequestCounterRef.current += 1);
     if (!nextThreadId) {
       if (threadIdRef.current === null && requestSeq === threadRequestSeqRef.current) {
         setRuns([]);
@@ -865,13 +843,6 @@ export function App() {
         });
         return;
       }
-      if (callId < runsAppliedCounterRef.current) {
-        // A newer refreshRuns response already applied; ignore this stale one so
-        // it cannot flip a completed run's status back to an earlier value.
-        logger.info("runs.refresh.ignored.stale", { threadId: nextThreadId, callId, applied: runsAppliedCounterRef.current });
-        return;
-      }
-      runsAppliedCounterRef.current = callId;
       setRuns(next);
       logger.info("runs.refresh.complete", { threadId: nextThreadId, count: next.length });
     } catch (caught) {
@@ -900,7 +871,6 @@ export function App() {
     setRunCheckpointSnapshots({});
     setHydratedRunLimit(INITIAL_HYDRATED_RUN_LIMIT);
     loggedMessageTextRef.current.clear();
-    snapshotFetchInFlight.current.clear();
     stream.clearDebugEvents();
     joinedRunIds.current.clear();
     stream.switchThread(nextThreadId);
@@ -1099,10 +1069,7 @@ export function App() {
   async function renameThreadTitle(nextThreadId: string): Promise<void> {
     const thread = threads.find((item) => item.threadId === nextThreadId);
     const currentTitle = thread?.title ?? "";
-    // flushSync so the menu is removed from the DOM *before* the blocking
-    // window.prompt appears. Without it React batches the state update and the
-    // menu stays visible behind the dialog until the handler yields.
-    flushSync(() => setOpenThreadMenu(null));
+    setOpenThreadMenu(null);
     const nextTitle = window.prompt("Rename thread", currentTitle);
     if (nextTitle === null) {
       return;
@@ -1136,8 +1103,7 @@ export function App() {
   async function removeThread(nextThreadId: string): Promise<void> {
     const thread = threads.find((item) => item.threadId === nextThreadId);
     const label = thread?.title ?? nextThreadId.slice(0, 8);
-    // flushSync so the menu closes in the DOM before the blocking window.confirm.
-    flushSync(() => setOpenThreadMenu(null));
+    setOpenThreadMenu(null);
     if (!window.confirm(`Delete "${label}"?`)) {
       return;
     }
@@ -1284,37 +1250,38 @@ export function App() {
     }
     const requestThreadId = threadId;
     const requestSeq = threadRequestSeqRef.current;
-    const isStale = (): boolean =>
-      threadIdRef.current !== requestThreadId || requestSeq !== threadRequestSeqRef.current;
-
-    // Only start fetches for runs that are neither already loaded nor in flight.
-    // This makes E10 idempotent under `runs` churn: refreshRuns polling replaces
-    // the runs array every second, and previously that aborted the in-flight
-    // snapshot fetch (via the effect-cleanup AbortController) before it could
-    // land — so the current run's snapshot never loaded, the live->persisted
-    // handoff never fired, and the transcript needed a manual reload. We now
-    // dedupe via a ref and DO NOT abort; the thread/seq staleness check drops
-    // any result that arrives after a thread switch.
-    const toFetch = runsToHydrate.filter(
-      (run) => !runCheckpointSnapshots[run.runId] && !snapshotFetchInFlight.current.has(run.runId),
+    // Lazy hydration: only fetch snapshots for the newest window of finished
+    // runs (plus the run being viewed), not every finished run on the thread.
+    const missingRuns = selectRunsToHydrate(
+      runsInMessageOrder,
+      runCheckpointSnapshots,
+      hydratedRunLimit,
+      PERSISTED_RUN_STATUSES,
+      currentRunId,
     );
-    if (toFetch.length === 0) {
+    if (missingRuns.length === 0) {
       return undefined;
     }
+    let cancelled = false;
+    const controller = new AbortController();
+    const isStale = (): boolean =>
+      cancelled ||
+      controller.signal.aborted ||
+      threadIdRef.current !== requestThreadId ||
+      requestSeq !== threadRequestSeqRef.current;
+
     logger.info("runs.checkpoints.load.start", {
       threadId: requestThreadId,
-      count: toFetch.length,
+      count: missingRuns.length,
       hydratedRunLimit,
     });
-    for (const run of toFetch) {
-      snapshotFetchInFlight.current.add(run.runId);
-    }
+
     // Fetch each run independently and apply as it resolves, so one slow or
     // failing run never blocks hydration of the others (unlike Promise.all).
     void Promise.allSettled(
-      toFetch.map(async (run) => {
+      missingRuns.map(async (run) => {
         try {
-          const snapshot = await getRunCheckpointSnapshot(apiUrl, run.threadId, run.runId);
+          const snapshot = await getRunCheckpointSnapshot(apiUrl, run.threadId, run.runId, controller.signal);
           if (isStale() || snapshot.run.threadId !== requestThreadId) {
             return;
           }
@@ -1322,7 +1289,12 @@ export function App() {
             current[run.runId] ? current : { ...current, [run.runId]: snapshot },
           );
         } catch (caught) {
-          if (isStale()) {
+          if (
+            cancelled ||
+            controller.signal.aborted ||
+            (caught instanceof DOMException && caught.name === "AbortError")
+          ) {
+            logger.debug("runs.checkpoints.load.aborted", { threadId: requestThreadId, runId: run.runId });
             return;
           }
           logger.error("runs.checkpoints.load.failed", {
@@ -1330,17 +1302,17 @@ export function App() {
             runId: run.runId,
             message: caught instanceof Error ? caught.message : String(caught),
           });
-          setError(caught instanceof Error ? caught.message : "Unable to load run checkpoints.");
-        } finally {
-          snapshotFetchInFlight.current.delete(run.runId);
+          if (threadIdRef.current === requestThreadId && requestSeq === threadRequestSeqRef.current) {
+            setError(caught instanceof Error ? caught.message : "Unable to load run checkpoints.");
+          }
         }
       }),
     );
-    return undefined;
-    // Keyed on the stable set of runs-to-hydrate (runsToHydrateKey), NOT the
-    // `runs` array identity, so refreshRuns polling does not re-trigger/abort.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiUrl, threadId, runsToHydrateKey]);
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [apiUrl, currentRunId, hydratedRunLimit, runCheckpointSnapshots, runs, runsInMessageOrder, threadId]);
 //E11
   useEffect(() => {
     const handlePopState = (): void => {
@@ -1355,7 +1327,6 @@ export function App() {
       setCurrentRunId(null);
       setRunCheckpointSnapshots({});
       setHydratedRunLimit(INITIAL_HYDRATED_RUN_LIMIT);
-      snapshotFetchInFlight.current.clear();
       stream.clearDebugEvents();
       joinedRunIds.current.clear();
       switchThreadRef.current?.(nextThreadId);
@@ -1382,18 +1353,11 @@ export function App() {
     if (!currentRunId || stream.isLoading) {
       return;
     }
-    if (shouldHandoffLiveToPersisted(currentRunStatus, currentRunSnapshotLoaded, ACTIVE_RUN_STATUSES, PERSISTED_RUN_STATUSES)) {
+    if (currentRunStatus && !ACTIVE_RUN_STATUSES.has(currentRunStatus)) {
+      if (PERSISTED_RUN_STATUSES.has(currentRunStatus) && !currentRunSnapshotLoaded) {
+        return;
+      }
       logger.token("activeRun.current.completed", { threadId, runId: currentRunId, status: currentRunStatus });
-      // Atomic live -> persisted handoff. Only clear the live transcript once the
-      // persisted snapshot is loaded (or the run terminated without a persisted
-      // snapshot). Clearing earlier (as E14 used to) blanked the transcript until a
-      // manual reload. persistedMessageEntries renders the snapshot and
-      // liveRunMessages dedups any lingering live messages against it, so the
-      // transcript stays populated across the swap.
-      setVisibleMessages([]);
-      setOptimisticMessages([]);
-      loggedMessageTextRef.current.clear();
-      stream.clearDebugEvents();
       setCurrentRunId(null);
     }
   }, [currentRunId, currentRunSnapshotLoaded, currentRunStatus, stream.isLoading, threadId]);
@@ -1426,15 +1390,16 @@ export function App() {
           : run,
       ),
     );
-    // Drop any stale snapshot so E10 re-hydrates the final persisted checkpoint.
+    setVisibleMessages([]);
+    setOptimisticMessages([]);
     setRunCheckpointSnapshots((current) => {
       const { [currentRunId]: _staleSnapshot, ...rest } = current;
       return rest;
     });
-    // NOTE: the live transcript (visibleMessages/currentRunId/debugEvents) is NOT
-    // cleared here. E13 performs the live -> persisted handoff atomically once the
-    // persisted snapshot is loaded, so the transcript never blanks between the
-    // terminal event and the snapshot fetch.
+    loggedMessageTextRef.current.clear();
+    // setCurrentRunId(null);
+    // Clear debug events so that the next run can start fresh.
+    stream.clearDebugEvents();
     void refreshRuns(threadId);
     // refreshRuns intentionally owns async persisted reload after terminal lifecycle events.
     // eslint-disable-next-line react-hooks/exhaustive-deps

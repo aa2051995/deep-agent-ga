@@ -1,13 +1,8 @@
 import { describe, expect, it } from "vitest";
-import {
-  hasEarlierUnhydratedRuns,
-  selectRunsToHydrate,
-  shouldHandoffLiveToPersisted,
-} from "./runHydration";
+import { hasEarlierUnhydratedRuns, selectRunsToHydrate } from "./runHydration";
 import type { RunCheckpointSnapshot, RunSummary } from "./types";
 
 const PERSISTED = new Set(["success", "error", "interrupted", "timeout"]);
-const ACTIVE = new Set(["pending", "running"]);
 
 function run(id: string, status = "success", createdAt = "2026-01-01T00:00:00Z"): RunSummary {
   return { runId: id, threadId: "t1", status, createdAt } as RunSummary;
@@ -70,34 +65,5 @@ describe("hasEarlierUnhydratedRuns", () => {
   it("ignores active runs when counting", () => {
     const runs = [run("r1"), run("r2", "running"), run("r3", "pending")];
     expect(hasEarlierUnhydratedRuns(runs, PERSISTED, 3)).toBe(false);
-  });
-});
-
-describe("shouldHandoffLiveToPersisted", () => {
-  it("keeps the live transcript while the run is still active", () => {
-    expect(shouldHandoffLiveToPersisted("running", false, ACTIVE, PERSISTED)).toBe(false);
-    expect(shouldHandoffLiveToPersisted("pending", true, ACTIVE, PERSISTED)).toBe(false);
-  });
-
-  it("keeps the live transcript for an unknown/absent status", () => {
-    expect(shouldHandoffLiveToPersisted(null, true, ACTIVE, PERSISTED)).toBe(false);
-    expect(shouldHandoffLiveToPersisted(undefined, true, ACTIVE, PERSISTED)).toBe(false);
-  });
-
-  it("waits for the persisted snapshot before handing off a completed run", () => {
-    // This is the core regression: a terminal run whose snapshot has not loaded
-    // yet must NOT clear the live transcript (that blanked it until reload).
-    expect(shouldHandoffLiveToPersisted("success", false, ACTIVE, PERSISTED)).toBe(false);
-    expect(shouldHandoffLiveToPersisted("error", false, ACTIVE, PERSISTED)).toBe(false);
-  });
-
-  it("hands off once the persisted snapshot is loaded", () => {
-    expect(shouldHandoffLiveToPersisted("success", true, ACTIVE, PERSISTED)).toBe(true);
-    expect(shouldHandoffLiveToPersisted("interrupted", true, ACTIVE, PERSISTED)).toBe(true);
-  });
-
-  it("hands off immediately for terminal statuses that have no persisted snapshot", () => {
-    // e.g. a cancelled run: terminal but not in PERSISTED_RUN_STATUSES.
-    expect(shouldHandoffLiveToPersisted("cancelled", false, ACTIVE, PERSISTED)).toBe(true);
   });
 });

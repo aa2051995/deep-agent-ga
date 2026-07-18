@@ -105,7 +105,7 @@ export function useDeepResearchStream(
   onRunCreated?: (run: RunCallbackMeta) => void,
 ): DeepResearchStream {
   const [debugEvents, setDebugEvents] = useState<DebugEvent[]>([]);
-  logger.debug("stream.hook.render", { apiUrl, threadId });
+  // logger.debug("stream.hook.render", { apiUrl, threadId });
 
   useEffect(() => {
     if (!threadId) {
@@ -325,15 +325,15 @@ export function useDeepResearchStream(
           setDebugEvents([]);
         },
       } as DeepResearchStream;
-      logger.debug("stream.normalized", {
-        messages: normalized.messages.length,
-        toolCalls: normalized.toolCalls.length,
-        subagents: normalized.subagents.size,
-        activeSubagents: normalized.activeSubagents.length,
-        interrupts: normalized.interrupts.length,
-        debugEvents: normalized.debugEvents.length,
-        isLoading: normalized.isLoading,
-      });
+      // logger.debug("stream.normalized", {
+      //   messages: normalized.messages.length,
+      //   toolCalls: normalized.toolCalls.length,
+      //   subagents: normalized.subagents.size,
+      //   activeSubagents: normalized.activeSubagents.length,
+      //   interrupts: normalized.interrupts.length,
+      //   debugEvents: normalized.debugEvents.length,
+      //   isLoading: normalized.isLoading,
+      // });
       return normalized;
     },
     [debugEvents, stream],

@@ -11,38 +11,13 @@ const LEVEL_RANK: Record<LogLevel, number> = {
   error: 40,
 };
 
-// Safe accessors so the logger works outside the browser (e.g. vitest's node
-// env, SSR) where `localStorage` is undefined. Reading falls back to null;
-// writing is a no-op.
-function storageGet(key: string): string | null {
-  if (typeof localStorage === "undefined") {
-    return null;
-  }
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function storageSet(key: string, value: string): void {
-  if (typeof localStorage === "undefined") {
-    return;
-  }
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    /* ignore */
-  }
-}
-
 function legacyEnabled(): boolean {
-  const value = storageGet(STORAGE_KEY);
+  const value = localStorage.getItem(STORAGE_KEY);
   return value == null || value === "true";
 }
 
 export function getLogMode(): LogMode {
-  const value = storageGet(MODE_STORAGE_KEY);
+  const value = localStorage.getItem(MODE_STORAGE_KEY);
   if (LOG_MODES.includes(value as LogMode)) {
     return value as LogMode;
   }
@@ -53,7 +28,7 @@ export function getLogMode(): LogMode {
 }
 
 export function setLogMode(mode: LogMode): void {
-  storageSet(MODE_STORAGE_KEY, mode);
+  localStorage.setItem(MODE_STORAGE_KEY, mode);
 }
 
 function enabled(level: LogLevel): boolean {

@@ -38,33 +38,6 @@ export function selectRunsToHydrate(
 }
 
 /**
- * Decide whether the live transcript for the current run may now be handed off to
- * its persisted snapshot (i.e. the live messages/currentRunId may be cleared).
- *
- * The handoff must be *atomic*: we only clear the live transcript once the
- * persisted snapshot is available, otherwise the transcript blanks out until a
- * manual reload. Rules:
- *   - run still active (pending/running) -> keep live, no handoff.
- *   - run terminal + persisted status but snapshot not loaded yet -> wait.
- *   - run terminal with a persisted snapshot (or a terminal status that has no
- *     persisted snapshot) -> hand off.
- */
-export function shouldHandoffLiveToPersisted(
-  currentRunStatus: string | null | undefined,
-  snapshotLoaded: boolean,
-  activeStatuses: ReadonlySet<string>,
-  persistedStatuses: ReadonlySet<string>,
-): boolean {
-  if (!currentRunStatus || activeStatuses.has(currentRunStatus)) {
-    return false;
-  }
-  if (persistedStatuses.has(currentRunStatus) && !snapshotLoaded) {
-    return false;
-  }
-  return true;
-}
-
-/**
  * Whether there are finished runs older than the current lazy window that have
  * not been hydrated yet — used to show the "Load earlier runs" control.
  */

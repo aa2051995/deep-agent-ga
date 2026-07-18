@@ -50,6 +50,43 @@ export function liveRunMessages<T>(
  *
  * Generic so it stays free of the SDK types and easy to unit test.
  */
+/**
+ * An id is "stable" (authoritative for identity) unless it's an optimistic
+ * placeholder minted client-side before the server assigns the real id.
+ */
+export function isStableId(id: string | undefined | null): id is string {
+  return Boolean(id) && !(id as string).startsWith("optimistic-");
+}
+
+/**
+ * Whether two messages are the same logical message.
+ *
+ * Stable ids win: if both messages carry a stable id, they are the same only
+ * when the ids are equal — identical text is NOT enough. Different runs can emit
+ * messages with byte-identical content (e.g. a fixture that streams the same
+ * plan text every run); a content-only match would merge them and bleed one
+ * run's messages into another's live tail, and past the lazy-hydration window it
+ * would hide the current run entirely (its messages look "already persisted").
+ *
+ * The content fallback (type + text) runs only when a stable id is missing on
+ * either side — optimistic or un-id'd streamed messages — so an optimistic human
+ * message still matches its confirmed twin (which carries a server id).
+ */
+export function sameMessageIdentity<T>(
+  left: T,
+  right: T,
+  idOf: (message: T) => string | undefined,
+  typeOf: (message: T) => string,
+  textOf: (message: T) => string,
+): boolean {
+  const leftId = idOf(left);
+  const rightId = idOf(right);
+  if (isStableId(leftId) && isStableId(rightId)) {
+    return leftId === rightId;
+  }
+  return typeOf(left) === typeOf(right) && textOf(left) === textOf(right);
+}
+
 export function dedupeEntriesByKey<T>(
   entries: T[],
   keyOf: (entry: T) => string | null,

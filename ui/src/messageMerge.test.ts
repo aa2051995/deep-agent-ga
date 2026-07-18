@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { dedupeEntriesByKey, liveRunMessages } from "./messageMerge";
+import { dedupeEntriesByKey, isStableId, liveRunMessages, sameMessageIdentity } from "./messageMerge";
 
 type Msg = { id?: string; type: string; text: string };
 
-// Mirrors App.tsx sameMessage: id match, else type+text match.
+// Mirrors App.tsx sameMessage: stable ids are authoritative, content is only a
+// fallback for optimistic / un-id'd messages.
 const isSame = (a: Msg, b: Msg): boolean =>
-  (a.id != null && b.id != null && a.id === b.id) || (a.type === b.type && a.text === b.text);
+  sameMessageIdentity(a, b, (m) => m.id, (m) => m.type, (m) => m.text);
 
 const h = (id: string, text: string): Msg => ({ id, type: "human", text });
 const ai = (id: string, text: string): Msg => ({ id, type: "ai", text });
@@ -42,6 +43,57 @@ describe("liveRunMessages", () => {
     // Boundary is the last-matching persisted message (index 2, the repeat h1),
     // and the trailing filter still drops anything matching persisted.
     expect(liveRunMessages(visible, persisted, isSame)).toEqual([ai("a2", "B")]);
+  });
+
+  it("does NOT bleed a previous run in when runs share identical content (the fixture bug)", () => {
+    // Two runs stream byte-identical text but with run-scoped ids. The current
+    // run's messages must NOT be treated as "already persisted" just because an
+    // earlier run produced the same text — otherwise the live tail collapses and
+    // the current run never renders.
+    const visible = [
+      h("h-run1", "Research question"),
+      ai("plan-run1", "I'll break this into two tasks"),
+      h("h-run2", "Research question"), // same text as run1's prompt, different id
+      ai("plan-run2", "I'll break this into two tasks"), // same text as run1's plan
+    ];
+    const persisted = [h("h-run1", "Research question"), ai("plan-run1", "I'll break this into two tasks")];
+    expect(liveRunMessages(visible, persisted, isSame)).toEqual([
+      h("h-run2", "Research question"),
+      ai("plan-run2", "I'll break this into two tasks"),
+    ]);
+  });
+});
+
+describe("isStableId", () => {
+  it("treats server ids as stable and optimistic/empty ids as unstable", () => {
+    expect(isStableId("deep-orchestrator-plan-abc")).toBe(true);
+    expect(isStableId("optimistic-123")).toBe(false);
+    expect(isStableId(undefined)).toBe(false);
+    expect(isStableId("")).toBe(false);
+  });
+});
+
+describe("sameMessageIdentity", () => {
+  const idOf = (m: Msg) => m.id;
+  const typeOf = (m: Msg) => m.type;
+  const textOf = (m: Msg) => m.text;
+  const same = (a: Msg, b: Msg) => sameMessageIdentity(a, b, idOf, typeOf, textOf);
+
+  it("distinguishes different stable ids even when text is identical", () => {
+    expect(same(ai("plan-run1", "same text"), ai("plan-run2", "same text"))).toBe(false);
+  });
+
+  it("matches equal stable ids", () => {
+    expect(same(ai("plan-run1", "a"), ai("plan-run1", "grown a bit"))).toBe(true);
+  });
+
+  it("matches an optimistic message to its confirmed twin by content", () => {
+    expect(same({ id: "optimistic-1", type: "human", text: "hi" }, h("deep-user-input-r", "hi"))).toBe(true);
+  });
+
+  it("falls back to content when an id is missing", () => {
+    expect(same({ type: "human", text: "hi" }, h("h1", "hi"))).toBe(true);
+    expect(same({ type: "human", text: "hi" }, h("h1", "bye"))).toBe(false);
   });
 });
 
