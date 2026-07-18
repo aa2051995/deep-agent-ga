@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import {
   Check,
   CircleStop,
@@ -19,7 +20,7 @@ import { deleteThread, getRunCheckpointSnapshot, listRuns, listThreads, renameTh
 import { DEFAULT_API_URL, messageText, useDeepResearchStream } from "./stream";
 import type { DebugEvent, DeepResearchStream } from "./stream";
 import { selectInputRequests, subagentStreamToCard } from "./selectors";
-import { hasEarlierUnhydratedRuns, selectRunsToHydrate } from "./runHydration";
+import { hasEarlierUnhydratedRuns, selectRunsToHydrate, shouldHandoffLiveToPersisted } from "./runHydration";
 import { liveRunMessages } from "./messageMerge";
 import type { InputRequest, ProtocolEvent, RunCheckpointSnapshot, RunSummary, SubagentCard, ThreadSummary } from "./types";
 
@@ -1061,7 +1062,10 @@ export function App() {
   async function renameThreadTitle(nextThreadId: string): Promise<void> {
     const thread = threads.find((item) => item.threadId === nextThreadId);
     const currentTitle = thread?.title ?? "";
-    setOpenThreadMenu(null);
+    // flushSync so the menu is removed from the DOM *before* the blocking
+    // window.prompt appears. Without it React batches the state update and the
+    // menu stays visible behind the dialog until the handler yields.
+    flushSync(() => setOpenThreadMenu(null));
     const nextTitle = window.prompt("Rename thread", currentTitle);
     if (nextTitle === null) {
       return;
@@ -1095,7 +1099,8 @@ export function App() {
   async function removeThread(nextThreadId: string): Promise<void> {
     const thread = threads.find((item) => item.threadId === nextThreadId);
     const label = thread?.title ?? nextThreadId.slice(0, 8);
-    setOpenThreadMenu(null);
+    // flushSync so the menu closes in the DOM before the blocking window.confirm.
+    flushSync(() => setOpenThreadMenu(null));
     if (!window.confirm(`Delete "${label}"?`)) {
       return;
     }
@@ -1345,11 +1350,18 @@ export function App() {
     if (!currentRunId || stream.isLoading) {
       return;
     }
-    if (currentRunStatus && !ACTIVE_RUN_STATUSES.has(currentRunStatus)) {
-      if (PERSISTED_RUN_STATUSES.has(currentRunStatus) && !currentRunSnapshotLoaded) {
-        return;
-      }
+    if (shouldHandoffLiveToPersisted(currentRunStatus, currentRunSnapshotLoaded, ACTIVE_RUN_STATUSES, PERSISTED_RUN_STATUSES)) {
       logger.token("activeRun.current.completed", { threadId, runId: currentRunId, status: currentRunStatus });
+      // Atomic live -> persisted handoff. Only clear the live transcript once the
+      // persisted snapshot is loaded (or the run terminated without a persisted
+      // snapshot). Clearing earlier (as E14 used to) blanked the transcript until a
+      // manual reload. persistedMessageEntries renders the snapshot and
+      // liveRunMessages dedups any lingering live messages against it, so the
+      // transcript stays populated across the swap.
+      setVisibleMessages([]);
+      setOptimisticMessages([]);
+      loggedMessageTextRef.current.clear();
+      stream.clearDebugEvents();
       setCurrentRunId(null);
     }
   }, [currentRunId, currentRunSnapshotLoaded, currentRunStatus, stream.isLoading, threadId]);
@@ -1382,16 +1394,15 @@ export function App() {
           : run,
       ),
     );
-    setVisibleMessages([]);
-    setOptimisticMessages([]);
+    // Drop any stale snapshot so E10 re-hydrates the final persisted checkpoint.
     setRunCheckpointSnapshots((current) => {
       const { [currentRunId]: _staleSnapshot, ...rest } = current;
       return rest;
     });
-    loggedMessageTextRef.current.clear();
-    setCurrentRunId(null);
-    // Clear debug events so that the next run can start fresh.
-    stream.clearDebugEvents();
+    // NOTE: the live transcript (visibleMessages/currentRunId/debugEvents) is NOT
+    // cleared here. E13 performs the live -> persisted handoff atomically once the
+    // persisted snapshot is loaded, so the transcript never blanks between the
+    // terminal event and the snapshot fetch.
     void refreshRuns(threadId);
     // refreshRuns intentionally owns async persisted reload after terminal lifecycle events.
     // eslint-disable-next-line react-hooks/exhaustive-deps
