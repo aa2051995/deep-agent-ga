@@ -167,12 +167,18 @@ class DeepAgentDemoRunner:
             task_calls,
         )
         root_messages = [*prior_messages, user, planning, orchestrator_call]
+        # next_nodes MUST stay empty. The LangGraph SDK's useStream synthesizes a
+        # human-input `{ when: "breakpoint" }` interrupt whenever the thread head
+        # checkpoint has a non-empty `next` (the interrupt_before=[...] shape). The
+        # fixture drives the tools itself and never actually pauses for a human, so
+        # advertising next=["tools"] here made the UI show a spurious "human input"
+        # interrupt for the whole window until the final commit landed.
         step = await self._commit_state(
             run,
             previous,
             {"messages": root_messages},
             step + 1,
-            next_nodes=["tools"],
+            next_nodes=[],
         )
         logger.info("fixture.run.root_state_committed thread_id=%s run_id=%s step=%s", run.thread_id, run.run_id, step)
 

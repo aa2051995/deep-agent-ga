@@ -73,6 +73,28 @@ async def test_dummy_agent_streams_todos_and_two_subagents():
 
 
 @pytest.mark.asyncio
+async def test_dummy_agent_never_leaves_a_breakpoint_next():
+    # The LangGraph SDK's useStream synthesizes a spurious "human input" breakpoint
+    # interrupt whenever the thread-head checkpoint has a non-empty `next`. The
+    # fixture drives its own tools and never pauses for a human, so NO persisted
+    # root checkpoint may advertise a pending next (not just the final one) — the
+    # intermediate state is the head for the whole subagent window.
+    repo = InMemoryRepository()
+    await repo.ensure_thread("t1", "assistant")
+    run = RunRecord(run_id="r1", thread_id="t1", assistant_id="assistant")
+    await repo.create_run(run)
+
+    await DeepAgentDemoRunner(repo).run(run, "Investigate the protocol")
+
+    history = await repo.get_history("t1", limit=50)
+    assert history, "fixture run should persist checkpoints"
+    assert all(state.next == [] for state in history), (
+        f"no checkpoint may leave a non-empty next (would trigger a breakpoint "
+        f"interrupt); got {[s.next for s in history]}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_dummy_agent_resume_completes_without_rerun():
     # Continuing/resuming a demo run must finalize it, not re-run the whole demo
     # (which re-emits events and loops the UI's continue/interrupt).
