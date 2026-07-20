@@ -94,7 +94,7 @@ class WorkerShutdownManager:
             try:
                 await asyncio.wait(
                     list(self._active_tasks),
-                    timeout=10.0,
+                    timeout=3.0,
                     return_when=asyncio.ALL_COMPLETED,
                 )
             except Exception:

@@ -563,7 +563,7 @@ class ProtocolService:
             task_id = run.metadata.get("celery_task_id")
             if isinstance(task_id, str) and task_id:
                 terminate = os.getenv("STREAM_BACKEND_CELERY_TERMINATE_ON_CANCEL", "false").lower() in {"1", "true", "yes"}
-                self.run_scheduler.revoke(task_id, terminate=terminate)
+                # self.run_scheduler.revoke(task_id, terminate=terminate)
         run.cancel_requested = True
         run.status = "interrupted"
         await self.repo.save_run(run)
