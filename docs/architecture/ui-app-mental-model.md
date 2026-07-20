@@ -141,7 +141,8 @@ Grouped by responsibility (these are plain functions closed over render scope, n
 - **`submit`** — trim draft → push optimistic message → `stream.submit(...)` → refresh threads/runs.
 - **`resume`** — answer an interrupt via `stream.submit(null, { command: { resume } })`.
 - **`continueActiveRun`** — resume a discovered inactive run (`POST /resume` then `stream.joinStream`).
-- **`stopActiveRun`** — cancel a run (`POST /cancel`); marks it joined so the monitor won't re-show the banner.
+- **`stopActiveRun`** — cancel a discovered inactive run (`POST /cancel`); marks it joined so the monitor won't re-show the banner.
+- **`stopCurrentRun`** — cancel the actively-streaming run (topbar Stop): `stream.stop()` for instant client-side feedback, **and** `POST /cancel` for the backend — `stream.stop()` alone cannot reach the backend cancel route here (`reconnectOnMount: false` disables the SDK's internal cancel call), which previously left the worker running after the client disconnected.
 
 ### C. Run data & per-message projection
 - **`refreshRuns`** — reload runs for a thread, with stale-response guards via `threadRequestSeqRef`.
@@ -215,8 +216,9 @@ stateDiagram-v2
         stream.isLoading true,
         live cards from debugEvents
     end note
-    Streaming --> TerminalSeen: lifecycle terminal event\n(in debugEvents)
-    TerminalSeen --> Persisted: clear live buffers,\nrefreshRuns → load snapshot
+    Streaming --> Streaming: stopCurrentRun (cancel)\nstream.stop() + POST /cancel
+    Streaming --> TerminalSeen: lifecycle terminal event\n(in debugEvents; cancel included)
+    TerminalSeen --> Persisted: drop stale snapshot,\nrefreshRuns → load snapshot\n(runLiveMessages/runSubagentCards RETAINED, not cleared)
     Persisted --> Idle: currentRunId cleared
 
     Idle --> BannerShown: activeRunMonitor finds\nactive but NOT streaming run

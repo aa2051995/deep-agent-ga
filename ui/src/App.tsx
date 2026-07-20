@@ -20,6 +20,7 @@ import { DEFAULT_API_URL, messageText, useDeepResearchStream } from "./stream";
 import type { DebugEvent, DeepResearchStream } from "./stream";
 import { selectInputRequests, subagentStreamToCard } from "./selectors";
 import { hasEarlierUnhydratedRuns, selectRunsToHydrate } from "./runHydration";
+import { cancelCurrentRunRequest } from "./runControl";
 import {
   buildRunMessageEntries,
   messageIdSet,
@@ -1044,6 +1045,51 @@ export function App() {
     }
   }
 
+  async function stopCurrentRun(): Promise<void> {
+    logger.info("currentRun.stop.start", { threadId, runId: currentRunId });
+    // Always tear down the client-side stream immediately for instant UI
+    // feedback. NB: the SDK's own stream.stop() cannot cancel the backend run —
+    // it only calls the backend cancel route via its internal runMetadataStorage,
+    // which is null here because we pass reconnectOnMount: false (deliberately,
+    // to skip a heavy /history fetch on load — see stream.ts). Without the
+    // explicit cancel POST below, the worker keeps executing the run after the
+    // client disconnects: it stays `status: "running"` server-side, so a new
+    // submit gets rejected (`run_in_progress`) and the activeRunMonitor
+    // rediscovers it as an "inactive run" once isLoading flips false.
+    void stream.stop();
+    const request = cancelCurrentRunRequest(apiUrl, threadId, currentRunId);
+    if (!request) {
+      return;
+    }
+    const { url, runId } = request;
+    setError(null);
+    // Claim the run before the network round-trip so the activeRunMonitor
+    // (E15/E16) doesn't rediscover it — still `running` server-side, no longer
+    // streaming client-side — and flash the "inactive run" banner while the
+    // cancel request is in flight.
+    joinedRunIds.current.add(runId);
+    try {
+      const response = await fetch(url, { method: "POST" });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+      }
+      setCurrentRunId((current) => (current === runId ? null : current));
+      stream.clearDebugEvents();
+      logger.info("currentRun.stop.requested", { threadId, runId });
+    } catch (caught) {
+      // The claim above only suppresses rediscovery while the request is in
+      // flight; if it failed the backend run is genuinely still active, so
+      // release the claim and let the banner offer Resume/Cancel instead.
+      joinedRunIds.current.delete(runId);
+      logger.error("currentRun.stop.failed", {
+        threadId,
+        runId,
+        message: caught instanceof Error ? caught.message : String(caught),
+      });
+      setError(caught instanceof Error ? caught.message : "Unable to stop the run.");
+    }
+  }
+
   function newThread(): void {
     logger.info("thread.new");
     setOpenThreadMenu(null);
@@ -1704,7 +1750,7 @@ export function App() {
             </div>
             <div className="topbar-actions">
               {stream.isLoading && (
-                <button className="icon-button danger" onClick={() => void stream.stop()} type="button" title="Stop run">
+                <button className="icon-button danger" onClick={() => void stopCurrentRun()} type="button" title="Stop run">
                   <CircleStop size={18} />
                 </button>
               )}

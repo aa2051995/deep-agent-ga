@@ -11,7 +11,7 @@ Effect numbers (E1–E16) and `SH1` refer to [ui-effects-table.md](ui-effects-ta
 | # | Element | Handler |
 |---|---|---|
 | 1 | Composer submit (form / Enter / Send button) | `submit` |
-| 2 | Topbar Stop button | `stream.stop` |
+| 2 | Topbar Stop button | `stopCurrentRun` |
 | 3 | New research button | `newThread` |
 | 4 | Thread row | `openThread` |
 | 5 | Thread ⋯ menu toggle | inline `setOpenThreadMenu` |
@@ -67,19 +67,30 @@ Only rendered while `stream.isLoading`.
 ```
 Event:    click
   ↓
-Handler:  stream.stop()   (SDK-level abort of the active stream)
+Handler:  stopCurrentRun()
   ↓
-State:    SDK sets isLoading=false; no direct App setState.
-          Later: lifecycle SSE (E16) may deliver a terminal event → E14 reset path.
+State:    stream.stop() (SDK-level abort of the client stream — always called first);
+          then cancelCurrentRunRequest(apiUrl, threadId, currentRunId) — null if no
+          run id yet (return, nothing more to do); else:
+          setError(null) · joinedRunIds.add(runId) (BEFORE the POST, so E15/E16 can't
+          rediscover the now-not-streaming-but-still-`running` run and flash the
+          banner mid-request); then POST cancel →
+          setCurrentRunId(null if match) · clearDebugEvents
+          on error: joinedRunIds.delete(runId) + setError
+          later (E16 lifecycle terminal): clearActiveRun path as in #9
   ↓
-Effects:  E2 (isLoading) · E5 (isLoading) · E14 if a terminal lifecycle event arrives
+Effects:  E2 (isLoading) · E5 (isLoading/currentRunId) · E14 when the terminal
+          lifecycle event arrives (does not clear runLiveMessages/runSubagentCards)
   ↓
-Re-render: spinner/Stop button removed; status → "Ready"
+Re-render: spinner/Stop button removed immediately (stream.stop()); status → "Ready"
   ↓
-Network:  client-side stream abort (no dedicated cancel POST — contrast #9)
+Network:  client-side stream abort AND POST /threads/{t}/runs/{r}/cancel — see
+          "Why the topbar button needs its own cancel POST" below
   ↓
 DOM:      Stop button hidden; topbar status text changes
 ```
+
+**Why the topbar button needs its own cancel POST.** The SDK's `stream.stop()` only calls the backend's cancel route through an internal `runMetadataStorage`, which the SDK leaves `null` unless `reconnectOnMount` is `true`/a function — this app passes `reconnectOnMount: false` (deliberately, to skip a heavy `/history` fetch on load), which silently disables that internal call. Relying on `stream.stop()` alone (the original implementation) tore down only the client connection: the backend run kept executing, stayed `status: "running"`, a subsequent submit was rejected as `run_in_progress`, and the activeRunMonitor rediscovered the run and showed the "inactive run" banner — which read as a spurious blocker rather than a successful stop. `stopCurrentRun` fixes this by also POSTing the cancel route (`ui/src/runControl.ts` → `cancelCurrentRunRequest`), the same one #9 uses.
 
 ## 3. New research (sidebar New button)
 
@@ -364,7 +375,7 @@ DOM:      menu removed
 
 ## Cross-cutting notes
 
-- **Two "stop" paths differ.** Topbar Stop (#2) is a client-side `stream.stop()` (SDK abort); the banner Cancel (#9) is a server `POST /cancel`. They are not interchangeable — #2 halts local streaming, #9 terminates the run on the backend.
+- **Two "stop" paths, converged.** Topbar Stop (#2, `stopCurrentRun`) and banner Cancel (#9, `stopActiveRun`) both now POST `/threads/{t}/runs/{r}/cancel` to terminate the run on the backend. They differ only in *when* they claim `joinedRunIds` relative to the request — #2 also aborts the client-side stream first (`stream.stop()`, its target is actively streaming until that call), so it claims *before* the POST to avoid a rediscovery window; #9's target was already discovered as not-streaming, so there's no equivalent window and it claims *after*. (Previously #2 called only `stream.stop()`, which cannot reach the backend cancel route — see interaction #2.)
 - **`currentRunId` and `runs` are the trigger hubs.** Any interaction that touches them (#1, #8, #9, #15) fans out to E2/E5/E10/E13/E14/E15 — most of the effect graph.
 - **Thread-context switches (#3, #4, #7-current, #15)** all funnel through `resetVisibleThread`/E11's bulk reset and bump `threadRequestSeqRef`, invalidating in-flight requests from the previous thread.
 - **Ref-only interactions (#13)** intentionally cause no re-render — scroll position must not thrash React.
@@ -390,6 +401,6 @@ sequenceDiagram
     SDK->>submit: onRunCreated → setCurrentRunId + setRuns
     submit->>Effects: currentRunId/runs changed → E2,E5,E10,E13,E14,E15
     Backend-->>SDK: streamed tokens/tools
-    SDK-->>Composer: visibleMessages → re-render
-    Backend-->>Effects: lifecycle terminal → E14 hand off to persisted
+    SDK-->>Composer: runLiveMessages[currentRunId] (E2) → re-render
+    Backend-->>Effects: lifecycle terminal → E14 drops snapshot (retains live data) → E10 refetches
 ```
