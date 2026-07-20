@@ -15,7 +15,7 @@ runLiveMessages ──────┘
 ```
 
 - **M4** `runsInMessageOrder` — this thread's runs, oldest→newest; the iteration order for M7.
-- **M7** `displayedMessageEntries` — assembled **per run** by `buildRunMessageEntries`, in run order, from exactly one source per run via `persistedOrLive(snapshot, live)`: the persisted snapshot's messages once they have content, otherwise that run's live bucket (`runLiveMessages[runId]`, filled by **E2** via `selectLiveRunMessages` against the run's start baseline). Optimistic messages trail until confirmed.
+- **M7** `displayedMessageEntries` — assembled **per run** by `buildRunMessageEntries`, in run order, from exactly one source per run via `persistedOrLive(snapshot, live)`: the persisted snapshot's messages once they have content, otherwise that run's live bucket (`runLiveMessages[runId]`, filled by **E2** via `selectLiveRunMessages`, which excludes `otherRunsMessageIds` — every *other* run's known message ids, recomputed fresh each time rather than a one-time run-start snapshot; see [UI Flow 3](03-resume-run.md) for why that distinction matters). Optimistic messages trail until confirmed.
 
   Two things make this deterministic and gap-free:
   - Ids are deduped **globally**, earliest run wins (a later run's snapshot repeats earlier history), so every message belongs to exactly one run and the render key `${runId}:${messageId}` is unique by construction.
@@ -104,5 +104,5 @@ sequenceDiagram
 
 - `ui/src/App.tsx` → E10, E2, E2b, M4, M7, M8, `retainedSubagentCards`, `resetVisibleThread`, "Load earlier runs" button
 - `ui/src/runHydration.ts` → `selectRunsToHydrate`, `hasEarlierUnhydratedRuns`
-- `ui/src/messageMerge.ts` → `buildRunMessageEntries`, `persistedOrLive`, `selectLiveRunMessages`, `messageIdSet`, `sameMessageIdentity`
+- `ui/src/messageMerge.ts` → `buildRunMessageEntries`, `persistedOrLive`, `selectLiveRunMessages`, `collectOtherRunMessageIds`, `messageIdSet`, `sameMessageIdentity`
 - `ui/src/api.ts` → `getRunCheckpointSnapshot`, `listRuns`

@@ -36,7 +36,6 @@ Inside `stream.submit`, the SDK POSTs the `run.start` command, then fires **`onC
 
 1. `onRunCreated(run)` → the callback passed from `App`:
    - If `run.thread_id !== threadIdRef.current` → ignored (stale thread).
-   - `liveBaselineIdsRef.current = messageIdSet(streamMessagesRef.current, …)` — snapshots the message ids that already exist *before* this run's output starts arriving. Everything absent from this set (once the SDK starts streaming) belongs to the new run — see [UI Flow 6](06-browse-history.md).
    - `setCurrentRunId(run.run_id)` — setter.
    - `setRuns(prepend {status:"running"})` — setter.
 2. `setDebugEvents(append metadata event)` — setter in the hook.

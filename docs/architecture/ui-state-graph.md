@@ -195,17 +195,18 @@ For each state: **updaters** (setter call sites), **readers**, **effects that de
 - **Updated by:** `setRunLiveMessages` — E2 (routes `stream.messages` into the current run's bucket via `selectLiveRunMessages`), `resetVisibleThread`, E11. **Not** cleared by E14.
 - **Read by:** `displayedMessageEntries` (M7) via `buildRunMessageEntries` → `persistedOrLive` (`messageMerge.ts`).
 - **Memos depending:** M7.
-- **Note:** `stream.messages` accumulates the whole thread with **no run attribution**, so it is split into per-run buckets. A message enters run R's bucket only if it is absent from `liveBaselineIdsRef` — the ids that existed the moment R became current, captured in `onCreated`, `joinRunStream`, and `continueActiveRun`.
+- **Note:** `stream.messages` accumulates the whole thread with **no run attribution**, so it is split into per-run buckets. A message enters the *current* run's bucket (E2) unless it is already claimed by a **different** run — `otherRunsMessageIds` (`messageMerge.ts`'s `collectOtherRunMessageIds`), recomputed fresh on every E2 run from every other run's best-known source (its persisted snapshot if hydrated, else its own previously-captured live bucket), never from the current run itself.
 
   M7 then assembles the transcript per run, in run order, from exactly **one** source per run, via `persistedOrLive(snapshot, live)`: the persisted snapshot once it has content, otherwise that run's live bucket. Ids are deduped globally with the earliest run winning, so every message belongs to exactly one run and the render key `${runId}:${messageId}` is unique **by construction**.
 
-  Four earlier designs failed here, each replaced by this one:
+  Five earlier designs failed here, each replaced by this one:
   1. "slice from the last human message" — mis-bounded joined/resumed runs.
   2. "slice after the last already-persisted message" — depended on hydration timing, so a run started right after another finished inherited the previous run's messages and both appeared to stream.
   3. a single `visibleMessages` bucket owned by whichever run was current — a finished run had nowhere to live, so once E14 dropped its snapshot it vanished from the transcript until a later run happened to trigger hydration.
   4. treating **any** persisted snapshot as authoritative, including an **empty** one — a run can flip to a terminal status before its snapshot row is written, so the backend briefly serves `messages: []`; taking that at face value made the run vanish the instant it turned persisted. `persistedOrLive` treats an empty result as absent and falls back to the live bucket instead.
+  5. a one-time `liveBaselineIdsRef` snapshot — "everything in `stream.messages` when this run became current belongs to an earlier run," captured once at submit/join time. True for a *fresh* submit; wrong for **rejoining** an already-active run: switching to a thread triggers the SDK's initial state fetch, which reads the current checkpoint's accumulated messages — for a run still executing, that already includes everything it produced *before* the reconnect. The one-time baseline wrongly attributed that to "an earlier run," excluding the rejoined run's own prior content (including its own human message) from its bucket — it kept only tokens streamed *after* the reconnect, often nothing, so the run appeared to stream (`currentRunId` set, Stop button showing) with an empty transcript. `otherRunsMessageIds` has no such timing dependency: it never depends on *when* it's computed, only on what other runs are *currently* known to contain.
 
-  Keeping each run's bucket (and **not** clearing it in E14) is what closes the gap in (3); the `persistedOrLive` length check closes the gap in (4). E10 also skips caching an empty snapshot (so it isn't pinned forever) — see `runs.checkpoints.load.empty` in the source.
+  Keeping each run's bucket (and **not** clearing it in E14) is what closes the gap in (3); the `persistedOrLive` length check closes the gap in (4); dropping the one-time baseline for a continuously-recomputed other-runs set closes the gap in (5). E10 also skips caching an empty snapshot (so it isn't pinned forever) — see `runs.checkpoints.load.empty` in the source.
 - **Callbacks modifying:** `resetVisibleThread`.
 
 ### 10b. `runSubagentCards` (`Record<runId, SubagentCard[]>`)

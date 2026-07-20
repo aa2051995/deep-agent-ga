@@ -23,7 +23,7 @@ import { hasEarlierUnhydratedRuns, selectRunsToHydrate } from "./runHydration";
 import { cancelCurrentRunRequest } from "./runControl";
 import {
   buildRunMessageEntries,
-  messageIdSet,
+  collectOtherRunMessageIds,
   persistedOrLive,
   sameMessageIdentity,
   selectLiveRunMessages,
@@ -188,8 +188,6 @@ function compactDetail(value: string, maxLength = 54): string {
 function messageKey(message: Message, index: number): string {
   return message.id ?? `${message.type}-${index}`;
 }
-
-const EMPTY_MESSAGE_IDS: ReadonlySet<string> = new Set();
 
 /** Reference-equality list compare, so re-capturing an unchanged run is a no-op. */
 function sameMessageList(left: Message[] | undefined, right: Message[]): boolean {
@@ -579,12 +577,6 @@ export function App() {
   const [runCheckpointSnapshots, setRunCheckpointSnapshots] = useState<Record<string, RunCheckpointSnapshot>>({});
   const [hydratedRunLimit, setHydratedRunLimit] = useState(INITIAL_HYDRATED_RUN_LIMIT);
   const joinedRunIds = useRef(new Set<string>());
-  // Message ids that already existed when the current run started. Everything
-  // outside this set (and not owned by a persisted run) is the current run's
-  // live output — see selectLiveRunMessages. Captured at run start so live
-  // attribution never depends on snapshot-hydration timing.
-  const liveBaselineIdsRef = useRef<Set<string>>(new Set());
-  const streamMessagesRef = useRef<Message[]>([]);
   const joinRunStreamRef = useRef<((run: ActiveRun) => Promise<void>) | null>(null);
   const activeRunRef = useRef<ActiveRun | null>(null);
   const currentRunIdRef = useRef<string | null>(null);
@@ -625,8 +617,6 @@ export function App() {
         });
         return;
       }
-      // Everything already streamed belongs to earlier runs, not this one.
-      liveBaselineIdsRef.current = messageIdSet(streamMessagesRef.current, (message) => message.id);
       setCurrentRunId(run.run_id);
       setRuns((current) => [
         {
@@ -652,8 +642,6 @@ export function App() {
     setActiveRun((current) =>
       current?.threadId === run.threadId && current.runId === run.runId ? null : current,
     );
-    // Everything already streamed belongs to earlier runs, not the joined one.
-    liveBaselineIdsRef.current = messageIdSet(streamMessagesRef.current, (message) => message.id);
     setCurrentRunId(run.runId);
     logger.info("joinRunStream.start", run);
     try {
@@ -702,6 +690,22 @@ export function App() {
     : null;
   const currentRunStatus = currentRun?.status ?? null;
   const currentRunSnapshotLoaded = currentRunId ? Boolean(runCheckpointSnapshots[currentRunId]) : false;
+  // Message ids already attributed to a run OTHER than the current one — see
+  // collectOtherRunMessageIds for why this is recomputed fresh every time
+  // (not a one-time snapshot taken at join/submit time): that's what makes
+  // rejoining an already-active run work. Feeds E2 below, which filters
+  // `stream.messages` against it to isolate the current run's own output.
+  const otherRunsMessageIds = useMemo(
+    () =>
+      collectOtherRunMessageIds<Message>(
+        runsInMessageOrder.map((run) => run.runId),
+        currentRunId,
+        (runId) => runCheckpointSnapshots[runId]?.messages as Message[] | undefined,
+        (runId) => runLiveMessages[runId],
+        (message) => message.id,
+      ),
+    [currentRunId, runCheckpointSnapshots, runLiveMessages, runsInMessageOrder],
+  );
   // The transcript is assembled per run, in run order, from exactly one source
   // per run: the persisted snapshot once it exists, otherwise the messages
   // captured live for that run. Every message therefore belongs to exactly one
@@ -874,8 +878,6 @@ export function App() {
     setRunCheckpointSnapshots({});
     setHydratedRunLimit(INITIAL_HYDRATED_RUN_LIMIT);
     loggedMessageTextRef.current.clear();
-    streamMessagesRef.current = [];
-    liveBaselineIdsRef.current = new Set();
     stream.clearDebugEvents();
     joinedRunIds.current.clear();
     stream.switchThread(nextThreadId);
@@ -993,8 +995,6 @@ export function App() {
       }
       joinedRunIds.current.add(run.runId);
       setActiveRun(null);
-      // Everything already streamed belongs to earlier runs, not the resumed one.
-      liveBaselineIdsRef.current = messageIdSet(streamMessagesRef.current, (message) => message.id);
       setCurrentRunId(run.runId);
       setRunCheckpointSnapshots((current) => {
         const { [run.runId]: _staleSnapshot, ...rest } = current;
@@ -1203,15 +1203,14 @@ export function App() {
       return;
     }
     logStreamingTokens(stream.messages);
-    // Mirrored so a run starting later can snapshot the ids that already exist.
-    streamMessagesRef.current = stream.messages;
     if (currentRunId !== null) {
-      // Route the accumulated stream into the current run's own bucket: only the
-      // messages that appeared after this run started belong to it.
+      // Route the accumulated stream into the current run's own bucket: every
+      // message not already claimed by a different run belongs to it. See
+      // otherRunsMessageIds for why this is recomputed fresh (not a one-time
+      // snapshot) — that's what makes rejoining an already-active run work.
       const owned = selectLiveRunMessages(
         stream.messages,
-        liveBaselineIdsRef.current,
-        EMPTY_MESSAGE_IDS,
+        otherRunsMessageIds,
         (message) => message.id,
       );
       setRunLiveMessages((current) =>
@@ -1230,7 +1229,7 @@ export function App() {
               ),
           ),
     );
-  }, [currentRunId, stream.isLoading, stream.messages]);
+  }, [currentRunId, otherRunsMessageIds, stream.isLoading, stream.messages]);
 //E2b
   useEffect(() => {
     if (currentRunId === null || liveRunSubagentCards.length === 0) {
@@ -1426,8 +1425,6 @@ export function App() {
       setCurrentRunId(null);
       setRunCheckpointSnapshots({});
       setHydratedRunLimit(INITIAL_HYDRATED_RUN_LIMIT);
-      streamMessagesRef.current = [];
-      liveBaselineIdsRef.current = new Set();
       stream.clearDebugEvents();
       joinedRunIds.current.clear();
       switchThreadRef.current?.(nextThreadId);

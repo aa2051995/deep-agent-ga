@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildRunMessageEntries,
+  collectOtherRunMessageIds,
   isStableId,
   messageIdSet,
   persistedOrLive,
@@ -14,47 +15,45 @@ const h = (id: string, text: string): Msg => ({ id, type: "human", text });
 const ai = (id: string, text: string): Msg => ({ id, type: "ai", text });
 const idOf = (m: Msg) => m.id;
 const ids = (messages: Msg[]) => messageIdSet(messages, idOf);
-const live = (visible: Msg[], baseline: Msg[], persisted: Msg[]) =>
-  selectLiveRunMessages(visible, ids(baseline), ids(persisted), idOf);
+const live = (visible: Msg[], otherRuns: Msg[]) => selectLiveRunMessages(visible, ids(otherRuns), idOf);
 
 describe("selectLiveRunMessages", () => {
-  it("returns only messages that appeared after the run started", () => {
-    const run1 = [h("h1", "ww2"), ai("a1", "WW2...")];
-    const visible = [...run1, h("h2", "gulf"), ai("a2", "Gulf...")];
-    expect(live(visible, run1, run1)).toEqual([h("h2", "gulf"), ai("a2", "Gulf...")]);
-  });
-
-  it("does NOT re-stream a finished run when the next run starts (the bug)", () => {
-    // Run A finished; its snapshot was dropped and is being refetched, so it is
-    // NOT in persistedIds yet. The baseline captured at run B's start is what
-    // keeps A's messages out of B's live tail.
-    const runA = [h("hA", "question A"), ai("planA", "plan"), ai("finalA", "answer A")];
-    const visible = [...runA, h("hB", "question B"), ai("planB", "plan")];
-    expect(live(visible, runA, [])).toEqual([h("hB", "question B"), ai("planB", "plan")]);
-  });
-
-  it("excludes messages already owned by a persisted run even if not in the baseline", () => {
-    const visible = [h("h1", "a"), ai("a1", "A"), ai("a2", "B")];
-    expect(live(visible, [], [h("h1", "a"), ai("a1", "A")])).toEqual([ai("a2", "B")]);
+  it("excludes messages already claimed by another run", () => {
+    const otherRun = [h("hA", "question A"), ai("planA", "plan"), ai("finalA", "answer A")];
+    const visible = [...otherRun, h("hB", "question B"), ai("planB", "plan")];
+    expect(live(visible, otherRun)).toEqual([h("hB", "question B"), ai("planB", "plan")]);
   });
 
   it("is unaffected by identical content across runs (run-scoped ids differ)", () => {
-    const runA = [h("h-run1", "Research question"), ai("plan-run1", "same plan text")];
-    const visible = [...runA, h("h-run2", "Research question"), ai("plan-run2", "same plan text")];
-    expect(live(visible, runA, runA)).toEqual([
+    const otherRun = [h("h-run1", "Research question"), ai("plan-run1", "same plan text")];
+    const visible = [...otherRun, h("h-run2", "Research question"), ai("plan-run2", "same plan text")];
+    expect(live(visible, otherRun)).toEqual([
       h("h-run2", "Research question"),
       ai("plan-run2", "same plan text"),
     ]);
   });
 
-  it("returns everything for the first run on a thread (empty baseline, nothing persisted)", () => {
+  it("returns everything when no other run has claimed anything", () => {
     const visible = [h("h1", "x"), ai("a1", "y")];
-    expect(live(visible, [], [])).toEqual(visible);
+    expect(live(visible, [])).toEqual(visible);
   });
 
   it("treats id-less messages as live (persisted messages always carry an id)", () => {
     const visible = [h("h1", "a"), { type: "ai", text: "streaming chunk" }];
-    expect(live(visible, [h("h1", "a")], [h("h1", "a")])).toEqual([{ type: "ai", text: "streaming chunk" }]);
+    expect(live(visible, [h("h1", "a")])).toEqual([{ type: "ai", text: "streaming chunk" }]);
+  });
+
+  it("does NOT exclude the current run's own content just because it's already in the stream (the rejoin bug)", () => {
+    // Regression: a one-time "baseline" snapshot taken at (re)join time wrongly
+    // treated a rejoined run's own already-produced messages (loaded via the
+    // SDK's initial state fetch before the join call) as "belonging to an
+    // earlier run". Since selectLiveRunMessages no longer takes a baseline —
+    // only otherRunIds, which by construction never includes the current run's
+    // own ids — its own pre-reconnect content is never excluded.
+    const ownPriorContent = [h("hB", "question B"), ai("planB", "already streamed before reconnect")];
+    const visible = [...ownPriorContent, ai("moreB", "new token after reconnect")];
+    // No other run's ids passed — this run's own history is not "other".
+    expect(live(visible, [])).toEqual(visible);
   });
 });
 
@@ -96,6 +95,60 @@ describe("sameMessageIdentity", () => {
   it("falls back to content when an id is missing", () => {
     expect(same({ type: "human", text: "hi" }, h("h1", "hi"))).toBe(true);
     expect(same({ type: "human", text: "hi" }, h("h1", "bye"))).toBe(false);
+  });
+});
+
+describe("collectOtherRunMessageIds", () => {
+  const collect = (
+    runIds: string[],
+    currentRunId: string | null,
+    snapshots: Record<string, Msg[]>,
+    live: Record<string, Msg[]>,
+  ) => collectOtherRunMessageIds<Msg>(runIds, currentRunId, (r) => snapshots[r], (r) => live[r], idOf);
+
+  it("excludes the current run entirely, even when it has snapshot/live content", () => {
+    // This is the core of the rejoin fix: the run being (re)joined must never
+    // contribute to its own exclusion set, no matter what source it has.
+    const result = collect(
+      ["runB"],
+      "runB",
+      { runB: [h("hB", "question B")] },
+      { runB: [h("hB", "question B"), ai("planB", "plan")] },
+    );
+    expect(result).toEqual(new Set());
+  });
+
+  it("collects ids from another run's persisted snapshot", () => {
+    const result = collect(["runA", "runB"], "runB", { runA: [h("hA", "A"), ai("finalA", "answer")] }, {});
+    expect(result).toEqual(new Set(["hA", "finalA"]));
+  });
+
+  it("falls back to another run's live bucket when its snapshot isn't hydrated yet", () => {
+    const result = collect(["runA", "runB"], "runB", {}, { runA: [h("hA", "A"), ai("finalA", "answer")] });
+    expect(result).toEqual(new Set(["hA", "finalA"]));
+  });
+
+  it("contributes nothing for a run with neither a snapshot nor a live bucket", () => {
+    const result = collect(["runA", "runB"], "runB", {}, {});
+    expect(result).toEqual(new Set());
+  });
+
+  it("reproduces the reported bug: rejoining runB must not lose its own pre-reconnect content", () => {
+    // runA is an earlier, finished run (hydrated snapshot). runB is the run
+    // being rejoined; the SDK's initial state fetch already loaded its own
+    // pre-reconnect messages into runB's live bucket (this is what a one-time
+    // "baseline" snapshot at join time wrongly attributed to "an earlier run").
+    const runA = [h("hA", "question A"), ai("finalA", "answer A")];
+    const runBOwnContent = [h("hB", "question B"), ai("planB", "already streamed before reconnect")];
+    const otherIds = collect(
+      ["runA", "runB"],
+      "runB",
+      { runA },
+      { runB: runBOwnContent },
+    );
+    // Only runA's ids are "other" — none of runB's own content is excluded.
+    expect(otherIds).toEqual(new Set(["hA", "finalA"]));
+    expect(selectLiveRunMessages(runBOwnContent, otherIds, idOf)).toEqual(runBOwnContent);
   });
 });
 

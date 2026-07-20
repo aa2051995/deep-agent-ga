@@ -7,7 +7,7 @@ Every effect in `App`, numbered E1–E16 in source order, plus **E2b** (added al
 | # | Purpose | Dependencies | When it runs | What it changes | Network? | Updates state? |
 |---|---|---|---|---|---|---|
 | E1 | Close thread ⋯ menu on outside click / Escape | `[]` | Mount only | `openThreadMenu` (→ null); window listeners | No | Yes |
-| E2 | Route `stream.messages` into the *current run's own bucket* (`runLiveMessages[currentRunId]`, via `selectLiveRunMessages`); drop echoed optimistic msgs | `currentRunId, stream.isLoading, stream.messages` | On stream message/loading/run change | `runLiveMessages`, `optimisticMessages`, `loggedMessageTextRef`, `streamMessagesRef` | No | Yes |
+| E2 | Route `stream.messages` into the *current run's own bucket* (`runLiveMessages[currentRunId]`, via `selectLiveRunMessages` filtering out `otherRunsMessageIds`); drop echoed optimistic msgs | `currentRunId, otherRunsMessageIds, stream.isLoading, stream.messages` | On stream message/loading/run/other-runs change | `runLiveMessages`, `optimisticMessages`, `loggedMessageTextRef` | No | Yes |
 | E2b | Retain the current run's subagent cards (`runSubagentCards[currentRunId]`) — the card equivalent of E2 | `currentRunId, liveRunSubagentCards` | When the live cards for the current run change | `runSubagentCards` | No | Yes |
 | E3 | Auto-scroll transcript to bottom (layout) | `displayedMessages` | After DOM paint when transcript changes | DOM scroll only (via `messagesEndRef`, `shouldStickToBottomRef`) | No | No |
 | E4 | Track whether user is near bottom | `[]` | Mount only | `shouldStickToBottomRef` | No | No |

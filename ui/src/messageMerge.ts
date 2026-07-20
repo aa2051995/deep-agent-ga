@@ -3,37 +3,74 @@
  *
  * Deterministic and id-based. The SDK's accumulated message stream carries the
  * whole thread (every prior run plus the current one), with no run attribution.
- * A message belongs to the live run iff:
+ * A message belongs to the live run iff it is **not** already claimed by a
+ * *different* run (`otherRunIds` — see `collectOtherRunMessageIds`). Messages
+ * with no id are always live: the backend projection assigns an id to every
+ * persisted message, so an id-less message can only be freshly streamed.
  *
- * 1. it was **not** already present when this run started (`baselineIds`,
- *    captured the moment the run became current), and
- * 2. it is **not** already owned by a persisted run (`persistedIds`).
+ * This used to also exclude a `baselineIds` set captured once, at the moment
+ * the run became current ("everything already in the stream belongs to an
+ * earlier run"). That is true for a *fresh* submit — nothing has streamed for
+ * the new run yet — but wrong for *rejoining* an already-active run: switching
+ * to a thread triggers the SDK's initial state fetch, which reads the current
+ * checkpoint's accumulated messages — for a run still executing, that already
+ * includes everything the run produced *before* the reconnect. Capturing that
+ * as "belongs to an earlier run" excluded the rejoined run's own prior content
+ * (including its own human message), leaving only tokens streamed *after* the
+ * reconnect — often nothing, so the run appeared to stream (a run was current,
+ * the UI showed it loading) with an empty transcript. `otherRunIds`, derived
+ * fresh each time from what other runs are actually known to contain, has no
+ * such timing dependency and needs no separate baseline parameter.
  *
- * Messages with no id are always live: the backend projection assigns an id to
- * every persisted message, so an id-less message can only be freshly streamed.
- *
- * This replaces a positional "slice after the last persisted message" heuristic
- * whose result depended on hydration timing: right after a run finished, its
- * snapshot was dropped and refetched, and a run started inside that window
- * inherited the previous run's messages into its own live tail (both runs then
- * appeared to stream). The baseline is captured at run start and never depends
- * on whether a snapshot has loaded yet.
+ * This in turn replaced a positional "slice after the last persisted message"
+ * heuristic whose result depended on hydration timing: right after a run
+ * finished, its snapshot was dropped and refetched, and a run started inside
+ * that window inherited the previous run's messages into its own live tail
+ * (both runs then appeared to stream).
  *
  * Generic over the message type so it stays free of the SDK types.
  */
 export function selectLiveRunMessages<T>(
   visibleMessages: T[],
-  baselineIds: ReadonlySet<string>,
-  persistedIds: ReadonlySet<string>,
+  otherRunIds: ReadonlySet<string>,
   idOf: (message: T) => string | undefined,
 ): T[] {
   return visibleMessages.filter((message) => {
     const id = idOf(message);
-    if (!id) {
-      return true;
-    }
-    return !baselineIds.has(id) && !persistedIds.has(id);
+    return !id || !otherRunIds.has(id);
   });
+}
+
+/**
+ * Message ids already attributed to a run OTHER than `currentRunId` — from its
+ * persisted snapshot once hydrated (non-empty), else its own previously
+ * captured live bucket. Feeds `selectLiveRunMessages`'s exclusion set.
+ *
+ * Runs are visited in `runIds` order; pass them oldest-first (as
+ * `buildRunMessageEntries` does) so ids resolve to the earliest owning run
+ * when a later run's live bucket happens to also contain them (the SDK's
+ * message stream isn't run-scoped, so overlap is normal — the id-ownership
+ * dedup, not this function, is what makes the final attribution safe either
+ * way; this just avoids doing extra work for ids that don't need it).
+ */
+export function collectOtherRunMessageIds<T>(
+  runIds: string[],
+  currentRunId: string | null,
+  snapshotMessagesFor: (runId: string) => T[] | undefined,
+  liveMessagesFor: (runId: string) => T[] | undefined,
+  idOf: (message: T) => string | undefined,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const runId of runIds) {
+    if (runId === currentRunId) {
+      continue;
+    }
+    const source = persistedOrLive(snapshotMessagesFor(runId), liveMessagesFor(runId));
+    for (const id of messageIdSet(source, idOf)) {
+      ids.add(id);
+    }
+  }
+  return ids;
 }
 
 /** Stable ids of the given messages, for building a run baseline. */
