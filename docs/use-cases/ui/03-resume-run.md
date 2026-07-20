@@ -33,12 +33,14 @@ De-dupe guards prevent double work: `joinedRunIds` (a ref Set), `currentRunIdRef
 
 ### Auto-join branch
 
-`joinRunStreamRef.current(run)` (line 630):
+`joinRunStreamRef.current(run)`:
 1. Skip if `joinedRunIds` already has the run.
 2. `joinedRunIds.add(runId)`; clear a matching banner (`setActiveRun`); `setCurrentRunId(runId)`.
 3. `await stream.joinStream(runId, undefined, {streamMode})` — the SDK attaches and begins pushing `stream.messages`/events, entering the [Flow 2](02-watch-run-stream.md) streaming loop.
 
 `setCurrentRunId` triggers a render → **M1/M2/M3/M7** recompute, **E2/E10/E13** re-run; the transcript switches from persisted-only to live tail.
+
+**On a failed join** (step 3 rejects — e.g. the backend's event-broker subscribe failed, see [backend Use Case 4](../04-cancel-run.md) for that path): `joinedRunIds.delete(runId)` and `setCurrentRunId(current => current === runId ? null : current)` release the claim, plus `setError(...)` surfaces it. Previously the catch block only logged: `currentRunId` stayed pointing at a run that would never receive another event (transcript stays empty), and `joinedRunIds` permanently blocked any later retry — the run was effectively wedged until a full page reload. Releasing the claim lets the next activeRunMonitor pass (E15/E16) rediscover and retry it instead.
 
 ### Banner branch
 
@@ -56,6 +58,8 @@ Clicking **Resume run** calls **`continueActiveRun(run)`** (line 948):
 6. `await stream.joinStream(runId, …)` → streaming loop.
 
 The batch of setters in step 5 produces one render: banner disappears (`activeRun` null), `currentRunId` set → **M1/M2/M3/M7** recompute, **E10** (snapshot dropped → refetch candidate), **E13/E15** re-evaluate.
+
+**On a failed join** (step 6 rejects): same recovery as path A — `joinedRunIds.delete(runId)` + `setCurrentRunId(current => current === runId ? null : current)` release the claim so the run can be rediscovered (the banner reappears) instead of leaving `currentRunId` wedged on a run that will never stream.
 
 ## Phase diagram
 

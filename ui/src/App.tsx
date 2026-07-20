@@ -660,10 +660,19 @@ export function App() {
       await stream.joinStream(run.runId, undefined, { streamMode: [...STREAM_MODES] });
       logger.info("joinRunStream.completed", run);
     } catch (caught) {
+      // Release the claim so the run can be rediscovered and retried by the
+      // next activeRunMonitor pass. Without this, a failed join left
+      // joinedRunIds/currentRunId pointing at a run that would never receive
+      // another event: the topbar Stop button kept showing (a currentRunId
+      // is set) while the transcript stayed empty forever, with no way to
+      // recover short of a full page reload.
+      joinedRunIds.current.delete(run.runId);
+      setCurrentRunId((current) => (current === run.runId ? null : current));
       logger.error("joinRunStream.failed", {
         ...run,
         message: caught instanceof Error ? caught.message : String(caught),
       });
+      setError(caught instanceof Error ? caught.message : "Unable to join the active run.");
     }
   };
 
@@ -1008,6 +1017,11 @@ export function App() {
       await stream.joinStream(run.runId, undefined, { streamMode: [...STREAM_MODES] });
       logger.info("activeRun.continue.completed", run);
     } catch (caught) {
+      // Same recovery as joinRunStreamRef: release the claim so the run can
+      // be rediscovered (the banner reappears) instead of leaving
+      // currentRunId pointing at a run that will never receive another event.
+      joinedRunIds.current.delete(run.runId);
+      setCurrentRunId((current) => (current === run.runId ? null : current));
       logger.error("activeRun.continue.failed", {
         threadId: run.threadId,
         runId: run.runId,

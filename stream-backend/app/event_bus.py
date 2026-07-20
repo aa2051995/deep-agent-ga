@@ -250,13 +250,23 @@ class RabbitMQStreamSubscription:
             try:
                 await self._consumer.unsubscribe(self._subscriber_id)
             except Exception:
-                logger.error("event_broker.rabbitmq.unsubscribe_failed stream_name=%s subscriber_id=%s", self.stream_name, self._subscriber_id, exc_info=True)  
+                logger.error("event_broker.rabbitmq.unsubscribe_failed stream_name=%s subscriber_id=%s", self.stream_name, self._subscriber_id, exc_info=True)
             finally:
                 try:
                     await self._consumer.close()
                 except Exception:
                     logger.error("event_broker.rabbitmq.consumer_close_failed stream_name=%s", self.stream_name, exc_info=True)
-                self._broker.discard_subscription_consumer(self._consumer)
+                finally:
+                    # Unconditional even if close() above raised something
+                    # except Exception doesn't catch — notably CancelledError,
+                    # raised when the request that owns this subscription
+                    # (e.g. a thread's SSE connection) is torn down mid-close
+                    # because the client switched threads. A bare `except
+                    # Exception` there would skip this statement entirely on a
+                    # BaseException, leaking this consumer's reference forever
+                    # in _subscription_consumers (nothing currently sweeps it
+                    # — cleanup_orphan_consumers exists but is never called).
+                    self._broker.discard_subscription_consumer(self._consumer)
 
 
 class RabbitMQStreamBroker:

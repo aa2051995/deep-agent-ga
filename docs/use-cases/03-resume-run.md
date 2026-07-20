@@ -77,6 +77,7 @@ sequenceDiagram
 | Detached run, no checkpointer | Cannot resume via checkpoint; `research.resume` raises `ResearchRuntimeUnavailable`. |
 | Worker restarted (stale run) | `recover_stale_runs` marks `interrupted` with `recovery_reason=worker_restart`. |
 | Client disconnects while joining | `join_run` raises `499`; optional `cancel_on_disconnect` cancels the run. |
+| Event broker unreachable while joining (`wait_for_next_event` → `RabbitMQStreamBroker.subscribe` raises `EventBrokerUnavailable`) | `join_run` catches it, logs a warning, sleeps briefly, and retries — it does **not** 500 the request. This is a long-held connection the SDK's `stream.joinStream()` is awaiting with no client-side auto-reconnect of its own (unlike the SSE endpoints, whose native `EventSource` clients auto-reconnect on a closed connection — see [Use Case 4](04-cancel-run.md)); failing this request outright previously left the UI's `currentRunId`/`joinedRunIds` wedged on a run that would never receive another event. |
 
 ## Related Code
 
@@ -130,5 +131,5 @@ flowchart TD
 - **ResearchDeepAgentRunner.resume** — resumes the LangGraph run from its checkpoint (optionally with a `Command(resume=...)`).
 - **check_run_active** — handler for `.../active`; reports whether execution is live.
 - **ProtocolService.is_run_streaming** — backend-aware liveness: Celery task status or tracked asyncio task.
-- **join_run** — handler for `.../join`; blocks (non-streaming) until the run reaches a terminal status.
-- **wait_for_next_event** — parks the request on the broker until a new event arrives or a timeout (poll loop).
+- **join_run** — handler for `.../join`; blocks (non-streaming) until the run reaches a terminal status. Retries on `EventBrokerUnavailable` (event broker unreachable) the same way it already retried on `asyncio.TimeoutError`, instead of letting the exception 500 the request.
+- **wait_for_next_event** — parks the request on the broker until a new event arrives or a timeout (poll loop). Can raise `EventBrokerUnavailable` (from `RabbitMQStreamBroker.subscribe`) if the broker connection fails.

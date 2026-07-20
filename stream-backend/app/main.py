@@ -1040,6 +1040,19 @@ async def join_run(
         except asyncio.TimeoutError:
             logger.debug("runs.join.timeout thread_id=%s run_id=%s cursor=%s", thread_id, run_id, cursor)
             continue
+        except EventBrokerUnavailable:
+            # Same broker-subscribe path as the SSE endpoints, but this one is
+            # a plain (non-streaming) route the SDK's stream.joinStream() holds
+            # open server-side — no client-side auto-reconnect to lean on.
+            # Keep the connection alive and retry instead of failing outright:
+            # the run is genuinely active, the client is still waiting, and an
+            # unhandled exception here would 500 the join (already logged in
+            # event_bus.py; this SDK call previously had no retry of its own,
+            # leaving the UI's currentRunId/joinedRunIds stuck on a run that
+            # never receives another event).
+            logger.warning("runs.join.broker_unavailable thread_id=%s run_id=%s cursor=%s", thread_id, run_id, cursor)
+            await asyncio.sleep(2.0)
+            continue
     if cancel_on_disconnect:
         await service.cancel_run(thread_id, run_id)
     raise HTTPException(status_code=499, detail="Client disconnected")
