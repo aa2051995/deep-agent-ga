@@ -5,6 +5,7 @@ import importlib
 import logging
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -20,9 +21,43 @@ logger = logging.getLogger("stream_backend.research_runtime")
 # subagents and can legitimately need more. Overridable via LANGGRAPH_RECURSION_LIMIT.
 DEFAULT_RECURSION_LIMIT = 50
 
+# How often the streaming loop re-checks whether the run was cancelled. This is
+# the ONLY mechanism that stops an in-progress run: Celery's terminate=True
+# requires a pool that can kill a running worker slot (prefork), which this
+# project does not use on Windows (worker/README.md recommends threads/solo —
+# Python threads cannot be killed from outside). Checking on every streamed
+# event would hit the store on every token; this throttles it to a fixed
+# cadence instead. Overridable via RESEARCH_AGENT_CANCEL_POLL_INTERVAL.
+DEFAULT_CANCEL_POLL_INTERVAL_SECONDS = 1.0
+
 
 class ResearchRuntimeUnavailable(RuntimeError):
     pass
+
+
+class RunCancelled(Exception):
+    """Raised after a run has been cleanly stopped by a user-requested cancel.
+
+    Distinct from a failure: the runner has already persisted status
+    `interrupted` and a `lifecycle: interrupted` event before raising, so the
+    worker must not also mark the run `error` or `success` — see
+    worker/tasks.py's dedicated `except RunCancelled` handling.
+    """
+
+
+def _cancel_poll_interval_seconds() -> float:
+    raw = os.getenv("RESEARCH_AGENT_CANCEL_POLL_INTERVAL")
+    if not raw:
+        return DEFAULT_CANCEL_POLL_INTERVAL_SECONDS
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning(
+            "research.run.invalid_cancel_poll_interval value=%s default=%s",
+            raw,
+            DEFAULT_CANCEL_POLL_INTERVAL_SECONDS,
+        )
+        return DEFAULT_CANCEL_POLL_INTERVAL_SECONDS
 
 
 def ensure_research_agent_import_paths() -> list[str]:
@@ -434,6 +469,33 @@ class ResearchDeepAgentRunner:
                     )
         return merged
 
+    async def _safe_aclose(self, run: RunRecord, event_stream: Any) -> None:
+        """Best-effort close of the in-progress astream_events generator.
+
+        Not load-bearing for correctness — the run is marked interrupted and
+        persisted regardless — but lets the underlying graph release resources
+        promptly instead of only via eventual garbage collection.
+        """
+        try:
+            await event_stream.aclose()
+        except Exception:
+            logger.warning(
+                "research.run.cancel_aclose_failed thread_id=%s run_id=%s",
+                run.thread_id,
+                run.run_id,
+                exc_info=True,
+            )
+
+    async def _is_cancel_requested(self, run: RunRecord) -> bool:
+        """Re-fetch the run from the store and check its cancel flag.
+
+        The in-memory `run` passed into `run()`/`resume()` is a snapshot taken
+        before the worker started; a cancel request updates the stored row, not
+        this object, so it must be re-read to observe it.
+        """
+        stored = await self.repo.get_run(run.thread_id, run.run_id)
+        return stored is not None and stored.cancel_requested
+
     async def resume(self, run: RunRecord, resume_value: Any = None) -> None:
         logger.info(
             "research.resume.start thread_id=%s run_id=%s has_resume_value=%s",
@@ -454,6 +516,8 @@ class ResearchDeepAgentRunner:
         config = self._run_config(run)
         active_messages: dict[tuple[str, ...], dict[str, Any]] = {}
         final_text = ""
+        cancel_poll_interval = _cancel_poll_interval_seconds()
+        last_cancel_check = time.monotonic()
         try:
             input_value: Any = None
             if resume_value is not None:
@@ -463,11 +527,12 @@ class ResearchDeepAgentRunner:
                     raise ResearchRuntimeUnavailable(str(exc)) from exc
                 input_value = Command(resume=resume_value)
             logger.info("research.resume.astream_events.start thread_id=%s run_id=%s", run.thread_id, run.run_id)
-            async for event in agent.astream_events(
+            event_stream = agent.astream_events(
                 input_value,
                 config=config,
                 version=os.getenv("LANGGRAPH_STREAM_EVENTS_VERSION", "v2"),
-            ):
+            )
+            async for event in event_stream:
                 await self._mirror_agent_event(
                     run.thread_id,
                     run.run_id,
@@ -476,6 +541,23 @@ class ResearchDeepAgentRunner:
                 )
                 if is_root_model_stream(event):
                     final_text += content_from_chunk(event.get("data", {}).get("chunk"))
+
+                now = time.monotonic()
+                if now - last_cancel_check >= cancel_poll_interval:
+                    last_cancel_check = now
+                    if await self._is_cancel_requested(run):
+                        logger.info("research.resume.cancelled thread_id=%s run_id=%s", run.thread_id, run.run_id)
+                        await self._safe_aclose(run, event_stream)
+                        await self._save_final_snapshot(run, agent, config, final_text)
+                        run.status = "interrupted"
+                        await self._persist_run_snapshot(run)
+                        await self.repo.save_run(run)
+                        await self.repo.append_event(
+                            run.thread_id,
+                            "lifecycle",
+                            {"event": "interrupted", "run_id": run.run_id, "reason": "cancelled", "recovered": True},
+                        )
+                        raise RunCancelled(f"run {run.run_id} cancelled during resume")
             logger.info(
                 "research.resume.astream_events.complete thread_id=%s run_id=%s final_text_length=%s",
                 run.thread_id,
@@ -492,6 +574,11 @@ class ResearchDeepAgentRunner:
                 {"event": "completed", "run_id": run.run_id, "recovered": True},
             )
             logger.info("research.resume.success thread_id=%s run_id=%s", run.thread_id, run.run_id)
+        except RunCancelled:
+            # Status, snapshot, and the "interrupted" lifecycle event are
+            # already persisted at the raise site above; nothing left to do but
+            # propagate so the worker skips its own success/error marking.
+            raise
         except Exception as exc:
             logger.exception("research.resume.failed thread_id=%s run_id=%s", run.thread_id, run.run_id)
             run.status = "error"
@@ -555,13 +642,16 @@ class ResearchDeepAgentRunner:
         final_text = ""
         agent = await self._ensure_agent()
 
+        cancel_poll_interval = _cancel_poll_interval_seconds()
+        last_cancel_check = time.monotonic()
         try:
             logger.info("research.run.astream_events.start thread_id=%s run_id=%s", run.thread_id, run.run_id)
-            async for event in agent.astream_events(
+            event_stream = agent.astream_events(
                 input_payload,
                 config=config,
                 version=os.getenv("LANGGRAPH_STREAM_EVENTS_VERSION", "v2"),
-            ):
+            )
+            async for event in event_stream:
                 await self._mirror_agent_event(
                     run.thread_id,
                     run.run_id,
@@ -570,6 +660,23 @@ class ResearchDeepAgentRunner:
                 )
                 if is_root_model_stream(event):
                     final_text += content_from_chunk(event.get("data", {}).get("chunk"))
+
+                now = time.monotonic()
+                if now - last_cancel_check >= cancel_poll_interval:
+                    last_cancel_check = now
+                    if await self._is_cancel_requested(run):
+                        logger.info("research.run.cancelled thread_id=%s run_id=%s", run.thread_id, run.run_id)
+                        await self._safe_aclose(run, event_stream)
+                        await self._save_final_snapshot(run, agent, config, final_text, fallback_messages=messages)
+                        run.status = "interrupted"
+                        await self._persist_run_snapshot(run)
+                        await self.repo.save_run(run)
+                        await self.repo.append_event(
+                            run.thread_id,
+                            "lifecycle",
+                            {"event": "interrupted", "run_id": run.run_id, "reason": "cancelled"},
+                        )
+                        raise RunCancelled(f"run {run.run_id} cancelled during run")
 
             logger.info(
                 "research.run.astream_events.complete thread_id=%s run_id=%s final_text_length=%s",
@@ -587,6 +694,11 @@ class ResearchDeepAgentRunner:
                 {"event": "completed", "run_id": run.run_id},
             )
             logger.info("research.run.success thread_id=%s run_id=%s", run.thread_id, run.run_id)
+        except RunCancelled:
+            # Status, snapshot, and the "interrupted" lifecycle event are
+            # already persisted at the raise site above; nothing left to do but
+            # propagate so the worker skips its own success/error marking.
+            raise
         except Exception as exc:
             logger.exception("research.run.failed thread_id=%s run_id=%s", run.thread_id, run.run_id)
             run.status = "error"

@@ -136,6 +136,8 @@ stateDiagram-v2
     end note
 ```
 
+> **`STARTED --> REVOKED` via `terminate=True` requires a pool that can kill a running worker slot** (`prefork`, by sending SIGTERM/SIGKILL to the child process). This project defaults `STREAM_BACKEND_CELERY_TERMINATE_ON_CANCEL=false` and runs `--pool=threads`/`--pool=solo` on Windows (no `fork()`); Python threads cannot be killed from outside, so `celery.concurrency.thread.TaskPool` does not implement `kill_job` and a `terminate=True` revoke of a STARTED task under that pool raises `NotImplementedError` inside the worker's pidbox handler without transitioning the task — it keeps running. Actual in-progress cancellation for this deployment goes through `research_runtime`'s cooperative `cancel_requested` poll instead (see [Use Case 4](../use-cases/04-cancel-run.md)), which is independent of this Celery task-state diagram: the *task* may still report `SUCCESS` here while the *run* (the app-level `RunRecord`, not the Celery task) is correctly `interrupted`.
+
 ---
 
 ## 6. Streaming message state (`messages` channel)

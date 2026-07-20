@@ -19,7 +19,7 @@ if sys.platform == "win32":
 
 from app.deep_agent import DeepAgentDemoRunner
 from app.models import RunRecord
-from app.research_runtime import ResearchDeepAgentRunner, ResearchRuntimeUnavailable
+from app.research_runtime import ResearchDeepAgentRunner, ResearchRuntimeUnavailable, RunCancelled
 
 from app.runtime import create_publishing_repository
 from app.main import set_env
@@ -231,6 +231,13 @@ async def execute_run_direct(
                 logger.warning("celery.run.cancelled thread_id=%s run_id=%s", thread_id, run_id)
                 await update_run_status(repo, thread_id, run_id, "interrupted")
                 raise
+            except RunCancelled:
+                # A user-requested cancel: research_runtime already persisted
+                # status=interrupted and a lifecycle:interrupted event before
+                # raising this. Re-raise unchanged — do not overwrite with
+                # update_run_status(..., "error") the way a real failure would.
+                logger.info("celery.run.cancelled_by_request thread_id=%s run_id=%s", thread_id, run_id)
+                raise
             except Exception as exc:
                 logger.exception("celery.run.failed thread_id=%s run_id=%s error=%s", thread_id, run_id, exc)
                 await update_run_status(repo, thread_id, run_id, "error")
@@ -273,6 +280,10 @@ def run_agent(self: Any, run_record: dict[str, Any], input_value: Any = None) ->
         logger.info("celery.task.run.complete thread_id=%s run_id=%s task_id=%s", thread_id, run_id, self.request.id)
     except asyncio.CancelledError:
         logger.warning("celery.task.run.cancelled thread_id=%s run_id=%s task_id=%s", thread_id, run_id, self.request.id)
+    except RunCancelled:
+        # User-requested cancel, already fully recorded by research_runtime.
+        # Never retry a deliberate stop.
+        logger.info("celery.task.run.cancelled_by_request thread_id=%s run_id=%s task_id=%s", thread_id, run_id, self.request.id)
     except DETERMINISTIC_RUN_ERRORS as exc:
         # Deterministic failure: a retry would produce the same result. The run
         # is already recorded as error; swallow so autoretry does not fire.
@@ -306,6 +317,10 @@ def resume_agent(self: Any, run_record: dict[str, Any], resume_value: Any = None
         logger.info("celery.task.resume.complete thread_id=%s run_id=%s task_id=%s", thread_id, run_id, self.request.id)
     except asyncio.CancelledError:
         logger.warning("celery.task.resume.cancelled thread_id=%s run_id=%s task_id=%s", thread_id, run_id, self.request.id)
+    except RunCancelled:
+        # User-requested cancel, already fully recorded by research_runtime.
+        # Never retry a deliberate stop.
+        logger.info("celery.task.resume.cancelled_by_request thread_id=%s run_id=%s task_id=%s", thread_id, run_id, self.request.id)
     except DETERMINISTIC_RUN_ERRORS as exc:
         # Deterministic failure: a retry would produce the same result. The run
         # is already recorded as error; swallow so autoretry does not fire.

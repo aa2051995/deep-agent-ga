@@ -641,6 +641,8 @@ sequenceDiagram
 
 ## 25. `POST /threads/{thread_id}/runs/{run_id}/cancel`
 
+> `revoke(task_id, terminate?)` is not what stops an in-progress Celery run — `terminate=True` needs a `prefork` worker pool, which this project doesn't run on Windows; `STREAM_BACKEND_CELERY_TERMINATE_ON_CANCEL` defaults `false`. The actual stop is `research_runtime`'s cooperative `cancel_requested` poll inside the runner's own streaming loop. See [Use Case 4](../use-cases/04-cancel-run.md) for the full mechanism.
+
 ```mermaid
 sequenceDiagram
     participant Client
