@@ -97,7 +97,7 @@ Ids match the `//E…` comments in [`App.tsx`](../../../ui/src/App.tsx). "Kind" 
 | **M4** | 666 | `[runs, threadId]` | `runsInMessageOrder` — this thread's runs sorted oldest→newest. |
 | **M5** | 678 | `[runCheckpointSnapshots, runsInMessageOrder]` | `persistedMessageEntries` — deduped messages from checkpoint snapshots, attributed to the earliest run. |
 | **M6** | 682 | `[persistedMessageEntries]` | `persistedMessages` — just the messages of M5. |
-| **M7** | 686 | `[currentRunId, currentRunSnapshotLoaded, currentRunStatus, optimisticMessages, persistedMessageEntries, persistedMessages, visibleMessages]` | `displayedMessageEntries` — persisted + live tail + optimistic, the transcript actually rendered. |
+| **M7** | 686 | `[currentRunId, currentRunSnapshotLoaded, currentRunStatus, optimisticMessages, persistedMessageEntries, persistedMessageIds, visibleMessages]` | `displayedMessageEntries` — persisted + live tail + optimistic, the transcript actually rendered. The live tail is selected **by unique id** (`selectLiveRunMessages`) against `liveBaselineIdsRef` (ids present when the run started) and `persistedMessageIds`, so run attribution never depends on snapshot-hydration timing. |
 | **M8** | 722 | `[displayedMessageEntries]` | `displayedMessages` — messages of M7; the dep of the autoscroll layout effect E3. |
 
 Derived every render (not memoized): `visibleActiveRun` (652), `currentRun` (673), `currentRunStatus` (676), `currentRunSnapshotLoaded` (677).

@@ -20,7 +20,7 @@ import { DEFAULT_API_URL, messageText, useDeepResearchStream } from "./stream";
 import type { DebugEvent, DeepResearchStream } from "./stream";
 import { selectInputRequests, subagentStreamToCard } from "./selectors";
 import { hasEarlierUnhydratedRuns, selectRunsToHydrate } from "./runHydration";
-import { dedupeEntriesByKey, liveRunMessages, sameMessageIdentity } from "./messageMerge";
+import { dedupeEntriesByKey, messageIdSet, sameMessageIdentity, selectLiveRunMessages } from "./messageMerge";
 import type { InputRequest, ProtocolEvent, RunCheckpointSnapshot, RunSummary, SubagentCard, ThreadSummary } from "./types";
 
 const CURRENT_THREAD_KEY = "deep-research-ui:current-thread";
@@ -571,6 +571,12 @@ export function App() {
   const [runCheckpointSnapshots, setRunCheckpointSnapshots] = useState<Record<string, RunCheckpointSnapshot>>({});
   const [hydratedRunLimit, setHydratedRunLimit] = useState(INITIAL_HYDRATED_RUN_LIMIT);
   const joinedRunIds = useRef(new Set<string>());
+  // Message ids that already existed when the current run started. Everything
+  // outside this set (and not owned by a persisted run) is the current run's
+  // live output — see selectLiveRunMessages. Captured at run start so live
+  // attribution never depends on snapshot-hydration timing.
+  const liveBaselineIdsRef = useRef<Set<string>>(new Set());
+  const streamMessagesRef = useRef<Message[]>([]);
   const joinRunStreamRef = useRef<((run: ActiveRun) => Promise<void>) | null>(null);
   const activeRunRef = useRef<ActiveRun | null>(null);
   const currentRunIdRef = useRef<string | null>(null);
@@ -611,6 +617,8 @@ export function App() {
         });
         return;
       }
+      // Everything already streamed belongs to earlier runs, not this one.
+      liveBaselineIdsRef.current = messageIdSet(streamMessagesRef.current, (message) => message.id);
       setCurrentRunId(run.run_id);
       setRuns((current) => [
         {
@@ -636,6 +644,8 @@ export function App() {
     setActiveRun((current) =>
       current?.threadId === run.threadId && current.runId === run.runId ? null : current,
     );
+    // Everything already streamed belongs to earlier runs, not the joined one.
+    liveBaselineIdsRef.current = messageIdSet(streamMessagesRef.current, (message) => message.id);
     setCurrentRunId(run.runId);
     logger.info("joinRunStream.start", run);
     try {
@@ -683,19 +693,30 @@ export function App() {
     () => persistedMessageEntries.map((entry) => entry.message),
     [persistedMessageEntries],
   );
+  // Ids already owned by a persisted run — never re-rendered as live output.
+  const persistedMessageIds = useMemo(
+    () => messageIdSet(persistedMessages, (message) => message.id),
+    [persistedMessages],
+  );
   const displayedMessageEntries = useMemo(() => {
     const currentRunHasPersistedSnapshot =
       currentRunId !== null &&
       currentRunStatus !== null &&
       PERSISTED_RUN_STATUSES.has(currentRunStatus) &&
       currentRunSnapshotLoaded;
-    // Live messages = the tail of the accumulated stream after the last message
-    // that already belongs to a persisted (earlier) run. This keeps earlier-run
-    // messages from bleeding into the current run when the current run's own
-    // human prompt is not the most recent human in the stream (joined/resumed).
+    // Live messages are attributed by unique id, not by position: a message is
+    // this run's output only if it appeared after the run started (baseline) and
+    // is not already owned by a persisted run. Positional slicing depended on
+    // hydration timing, so a run started right after another finished inherited
+    // the previous run's messages and both appeared to stream.
     const liveMessages =
       currentRunId !== null && !currentRunHasPersistedSnapshot
-        ? liveRunMessages(visibleMessages, persistedMessages, sameMessage)
+        ? selectLiveRunMessages(
+            visibleMessages,
+            liveBaselineIdsRef.current,
+            persistedMessageIds,
+            (message) => message.id,
+          )
         : [];
     const liveEntries = liveMessages.map((message) => ({ message, runId: currentRunId }));
     const confirmed = [...persistedMessageEntries, ...liveEntries];
@@ -717,16 +738,18 @@ export function App() {
       (entry) => (entry.message.id ? `${entry.runId ?? "none"}:${entry.message.id}` : null),
       (entry) => messageText(entry.message).length,
     );
+    // liveBaselineIdsRef is intentionally not a dep: it only changes when a run
+    // becomes current, which always changes currentRunId in the same commit.
   }, [
     currentRunId,
     currentRunSnapshotLoaded,
     currentRunStatus,
     optimisticMessages,
     persistedMessageEntries,
-    persistedMessages,
+    persistedMessageIds,
     visibleMessages,
   ]);
-  
+
   const displayedMessages = useMemo(
     () => displayedMessageEntries.map((entry) => entry.message),
     [displayedMessageEntries],
@@ -871,6 +894,8 @@ export function App() {
     setRunCheckpointSnapshots({});
     setHydratedRunLimit(INITIAL_HYDRATED_RUN_LIMIT);
     loggedMessageTextRef.current.clear();
+    streamMessagesRef.current = [];
+    liveBaselineIdsRef.current = new Set();
     stream.clearDebugEvents();
     joinedRunIds.current.clear();
     stream.switchThread(nextThreadId);
@@ -988,6 +1013,8 @@ export function App() {
       }
       joinedRunIds.current.add(run.runId);
       setActiveRun(null);
+      // Everything already streamed belongs to earlier runs, not the resumed one.
+      liveBaselineIdsRef.current = messageIdSet(streamMessagesRef.current, (message) => message.id);
       setCurrentRunId(run.runId);
       setRunCheckpointSnapshots((current) => {
         const { [run.runId]: _staleSnapshot, ...rest } = current;
@@ -1146,6 +1173,8 @@ export function App() {
       return;
     }
     logStreamingTokens(stream.messages);
+    // Mirrored so a run starting later can snapshot the ids that already exist.
+    streamMessagesRef.current = stream.messages;
     setVisibleMessages(stream.messages);
     setOptimisticMessages((messages) =>
       currentRunId === null
@@ -1327,6 +1356,8 @@ export function App() {
       setCurrentRunId(null);
       setRunCheckpointSnapshots({});
       setHydratedRunLimit(INITIAL_HYDRATED_RUN_LIMIT);
+      streamMessagesRef.current = [];
+      liveBaselineIdsRef.current = new Set();
       stream.clearDebugEvents();
       joinedRunIds.current.clear();
       switchThreadRef.current?.(nextThreadId);

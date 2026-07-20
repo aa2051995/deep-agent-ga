@@ -1,66 +1,67 @@
 import { describe, expect, it } from "vitest";
-import { dedupeEntriesByKey, isStableId, liveRunMessages, sameMessageIdentity } from "./messageMerge";
+import {
+  dedupeEntriesByKey,
+  isStableId,
+  messageIdSet,
+  sameMessageIdentity,
+  selectLiveRunMessages,
+} from "./messageMerge";
 
 type Msg = { id?: string; type: string; text: string };
 
-// Mirrors App.tsx sameMessage: stable ids are authoritative, content is only a
-// fallback for optimistic / un-id'd messages.
-const isSame = (a: Msg, b: Msg): boolean =>
-  sameMessageIdentity(a, b, (m) => m.id, (m) => m.type, (m) => m.text);
-
 const h = (id: string, text: string): Msg => ({ id, type: "human", text });
 const ai = (id: string, text: string): Msg => ({ id, type: "ai", text });
+const idOf = (m: Msg) => m.id;
+const ids = (messages: Msg[]) => messageIdSet(messages, idOf);
+const live = (visible: Msg[], baseline: Msg[], persisted: Msg[]) =>
+  selectLiveRunMessages(visible, ids(baseline), ids(persisted), idOf);
 
-describe("liveRunMessages", () => {
-  it("returns only messages after the last persisted one (full history stream)", () => {
-    const visible = [h("h1", "ww2"), ai("a1", "WW2..."), h("h2", "gulf"), ai("a2", "Gulf...")];
-    const persisted = [h("h1", "ww2"), ai("a1", "WW2...")];
-    expect(liveRunMessages(visible, persisted, isSame)).toEqual([h("h2", "gulf"), ai("a2", "Gulf...")]);
+describe("selectLiveRunMessages", () => {
+  it("returns only messages that appeared after the run started", () => {
+    const run1 = [h("h1", "ww2"), ai("a1", "WW2...")];
+    const visible = [...run1, h("h2", "gulf"), ai("a2", "Gulf...")];
+    expect(live(visible, run1, run1)).toEqual([h("h2", "gulf"), ai("a2", "Gulf...")]);
   });
 
-  it("does NOT bleed a previous run in when the current run has no human yet (the bug)", () => {
-    // Current run (joined/resumed) streamed only an AI message; last human is the
-    // PREVIOUS run's prompt. Boundary must still be the last persisted message.
-    const visible = [h("h1", "gulf c2"), ai("a1", "Gulf c2 full"), ai("a2", "new run streaming")];
-    const persisted = [h("h1", "gulf c2"), ai("a1", "Gulf c2 full")];
-    expect(liveRunMessages(visible, persisted, isSame)).toEqual([ai("a2", "new run streaming")]);
+  it("does NOT re-stream a finished run when the next run starts (the bug)", () => {
+    // Run A finished; its snapshot was dropped and is being refetched, so it is
+    // NOT in persistedIds yet. The baseline captured at run B's start is what
+    // keeps A's messages out of B's live tail.
+    const runA = [h("hA", "question A"), ai("planA", "plan"), ai("finalA", "answer A")];
+    const visible = [...runA, h("hB", "question B"), ai("planB", "plan")];
+    expect(live(visible, runA, [])).toEqual([h("hB", "question B"), ai("planB", "plan")]);
   });
 
-  it("shows all messages when the stream carries only the current run (no history)", () => {
-    const visible = [h("h9", "new topic"), ai("a9", "answer")];
-    const persisted = [h("h1", "old"), ai("a1", "old answer")]; // different ids/text
-    expect(liveRunMessages(visible, persisted, isSame)).toEqual(visible);
+  it("excludes messages already owned by a persisted run even if not in the baseline", () => {
+    const visible = [h("h1", "a"), ai("a1", "A"), ai("a2", "B")];
+    expect(live(visible, [], [h("h1", "a"), ai("a1", "A")])).toEqual([ai("a2", "B")]);
   });
 
-  it("returns everything when nothing is persisted yet", () => {
-    const visible = [h("h1", "x"), ai("a1", "y")];
-    expect(liveRunMessages(visible, [], isSame)).toEqual(visible);
-  });
-
-  it("filters a stray persisted duplicate that appears after the boundary", () => {
-    const visible = [h("h1", "a"), ai("a1", "A"), h("h1", "a"), ai("a2", "B")];
-    const persisted = [h("h1", "a"), ai("a1", "A")];
-    // Boundary is the last-matching persisted message (index 2, the repeat h1),
-    // and the trailing filter still drops anything matching persisted.
-    expect(liveRunMessages(visible, persisted, isSame)).toEqual([ai("a2", "B")]);
-  });
-
-  it("does NOT bleed a previous run in when runs share identical content (the fixture bug)", () => {
-    // Two runs stream byte-identical text but with run-scoped ids. The current
-    // run's messages must NOT be treated as "already persisted" just because an
-    // earlier run produced the same text — otherwise the live tail collapses and
-    // the current run never renders.
-    const visible = [
-      h("h-run1", "Research question"),
-      ai("plan-run1", "I'll break this into two tasks"),
-      h("h-run2", "Research question"), // same text as run1's prompt, different id
-      ai("plan-run2", "I'll break this into two tasks"), // same text as run1's plan
-    ];
-    const persisted = [h("h-run1", "Research question"), ai("plan-run1", "I'll break this into two tasks")];
-    expect(liveRunMessages(visible, persisted, isSame)).toEqual([
+  it("is unaffected by identical content across runs (run-scoped ids differ)", () => {
+    const runA = [h("h-run1", "Research question"), ai("plan-run1", "same plan text")];
+    const visible = [...runA, h("h-run2", "Research question"), ai("plan-run2", "same plan text")];
+    expect(live(visible, runA, runA)).toEqual([
       h("h-run2", "Research question"),
-      ai("plan-run2", "I'll break this into two tasks"),
+      ai("plan-run2", "same plan text"),
     ]);
+  });
+
+  it("returns everything for the first run on a thread (empty baseline, nothing persisted)", () => {
+    const visible = [h("h1", "x"), ai("a1", "y")];
+    expect(live(visible, [], [])).toEqual(visible);
+  });
+
+  it("treats id-less messages as live (persisted messages always carry an id)", () => {
+    const visible = [h("h1", "a"), { type: "ai", text: "streaming chunk" }];
+    expect(live(visible, [h("h1", "a")], [h("h1", "a")])).toEqual([{ type: "ai", text: "streaming chunk" }]);
+  });
+});
+
+describe("messageIdSet", () => {
+  it("collects stable ids and skips id-less messages", () => {
+    expect(messageIdSet([h("h1", "a"), { type: "ai", text: "no id" }, ai("a1", "b")], idOf)).toEqual(
+      new Set(["h1", "a1"]),
+    );
   });
 });
 

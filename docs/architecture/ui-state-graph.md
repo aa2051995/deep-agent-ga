@@ -196,10 +196,10 @@ For each state: **updaters** (setter call sites), **readers**, **effects that de
 
 ### 10. `visibleMessages`
 - **Updated by:** `setVisibleMessages` — E2 (from `stream.messages`), `resetVisibleThread`, E11, E14.
-- **Read by:** `displayedMessageEntries` (M7) via `liveRunMessages` (`messageMerge.ts`).
+- **Read by:** `displayedMessageEntries` (M7) via `selectLiveRunMessages` (`messageMerge.ts`).
 - **Effects depending:** none (E2 writes it).
 - **Memos depending:** M7.
-- **Note:** `stream.messages` accumulates the whole thread's history. `displayedMessageEntries` isolates the current run's live tail with `liveRunMessages`, whose boundary is the **last already-persisted message** (not the last human message). The old "slice from the last human" heuristic mis-bounded joined/resumed runs, bleeding earlier-run messages into the live bucket (duplication + wrong run attribution).
+- **Note:** `stream.messages` accumulates the whole thread's history with **no run attribution**. M7 isolates the current run's output **by unique id**, not by position: a message is live only if it is absent from `liveBaselineIdsRef` (the ids that existed the moment the run became current — captured in `onCreated`, `joinRunStream`, and `continueActiveRun`) **and** absent from `persistedMessageIds`. Two earlier heuristics failed here: "slice from the last human message" mis-bounded joined/resumed runs, and "slice after the last already-persisted message" depended on hydration timing — after a run finished, E14 drops its snapshot and E10 refetches it, so a run started inside that window inherited the previous run's messages and both appeared to stream. The baseline is captured at run start and never depends on whether a snapshot has loaded.
 - **Callbacks modifying:** `resetVisibleThread`.
 
 ### 11. `optimisticMessages`

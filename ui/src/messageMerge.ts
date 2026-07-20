@@ -1,37 +1,51 @@
 /**
- * Extract the in-progress (live) run's messages from the SDK's accumulated
- * message stream, which carries the whole thread's history (all prior runs plus
- * the current one).
+ * Select the messages that belong to the currently streaming run.
  *
- * The boundary is the **last streamed message that is already persisted** (from
- * an earlier run's snapshot); everything after it belongs to the run in
- * progress. This is robust where a "slice from the last human message"
- * heuristic is not: for a joined/resumed run — or any run whose own human prompt
- * is not the most recent human in the accumulated history — that heuristic put
- * the boundary *inside* a previous run, so earlier-run messages bled into the
- * live bucket, getting duplicated and mis-attributed to the current run.
+ * Deterministic and id-based. The SDK's accumulated message stream carries the
+ * whole thread (every prior run plus the current one), with no run attribution.
+ * A message belongs to the live run iff:
  *
- * Generic over the message type so it stays free of the SDK types (and easy to
- * unit test). `isSame` is the caller's message-identity comparator.
+ * 1. it was **not** already present when this run started (`baselineIds`,
+ *    captured the moment the run became current), and
+ * 2. it is **not** already owned by a persisted run (`persistedIds`).
+ *
+ * Messages with no id are always live: the backend projection assigns an id to
+ * every persisted message, so an id-less message can only be freshly streamed.
+ *
+ * This replaces a positional "slice after the last persisted message" heuristic
+ * whose result depended on hydration timing: right after a run finished, its
+ * snapshot was dropped and refetched, and a run started inside that window
+ * inherited the previous run's messages into its own live tail (both runs then
+ * appeared to stream). The baseline is captured at run start and never depends
+ * on whether a snapshot has loaded yet.
+ *
+ * Generic over the message type so it stays free of the SDK types.
  */
-export function liveRunMessages<T>(
+export function selectLiveRunMessages<T>(
   visibleMessages: T[],
-  persistedMessages: T[],
-  isSame: (a: T, b: T) => boolean,
+  baselineIds: ReadonlySet<string>,
+  persistedIds: ReadonlySet<string>,
+  idOf: (message: T) => string | undefined,
 ): T[] {
-  if (persistedMessages.length === 0) {
-    return [...visibleMessages];
-  }
-  let lastPersistedIndex = -1;
-  for (let index = visibleMessages.length - 1; index >= 0; index -= 1) {
-    if (persistedMessages.some((persisted) => isSame(persisted, visibleMessages[index]))) {
-      lastPersistedIndex = index;
-      break;
+  return visibleMessages.filter((message) => {
+    const id = idOf(message);
+    if (!id) {
+      return true;
+    }
+    return !baselineIds.has(id) && !persistedIds.has(id);
+  });
+}
+
+/** Stable ids of the given messages, for building a run baseline. */
+export function messageIdSet<T>(messages: T[], idOf: (message: T) => string | undefined): Set<string> {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    const id = idOf(message);
+    if (id) {
+      ids.add(id);
     }
   }
-  return visibleMessages
-    .slice(lastPersistedIndex + 1)
-    .filter((message) => !persistedMessages.some((persisted) => isSame(persisted, message)));
+  return ids;
 }
 
 /**
