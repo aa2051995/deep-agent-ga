@@ -20,7 +20,7 @@ import { DEFAULT_API_URL, messageText, useDeepResearchStream } from "./stream";
 import type { DebugEvent, DeepResearchStream } from "./stream";
 import { selectInputRequests, subagentStreamToCard } from "./selectors";
 import { hasEarlierUnhydratedRuns, selectRunsToHydrate } from "./runHydration";
-import { dedupeEntriesByKey, messageIdSet, sameMessageIdentity, selectLiveRunMessages } from "./messageMerge";
+import { buildRunMessageEntries, messageIdSet, sameMessageIdentity, selectLiveRunMessages } from "./messageMerge";
 import type { InputRequest, ProtocolEvent, RunCheckpointSnapshot, RunSummary, SubagentCard, ThreadSummary } from "./types";
 
 const CURRENT_THREAD_KEY = "deep-research-ui:current-thread";
@@ -52,10 +52,6 @@ type RunAction = {
   id: string;
   label: string;
   status: "running" | "done";
-};
-type DisplayedMessageEntry = {
-  message: Message;
-  runId: string | null;
 };
 const loggedLiveSubagentTaskIds = new Set<string>();
 const ACTIVE_RUN_STATUSES = new Set(["pending", "running"]);
@@ -186,29 +182,14 @@ function messageKey(message: Message, index: number): string {
   return message.id ?? `${message.type}-${index}`;
 }
 
-function messageEntriesFromCheckpointSnapshots(
-  runs: RunSummary[],
-  snapshots: Record<string, RunCheckpointSnapshot>,
-): DisplayedMessageEntry[] {
-  // Each LangGraph checkpoint includes the full thread history, so later runs
-  // contain the same messages as earlier ones.  Deduplicate by message id so
-  // every unique message appears exactly once, attributed to the earliest run
-  // that produced it.  This prevents the same user message from showing up
-  // multiple times (once per run) with different subagent cards attached.
-  const seenIds = new Set<string>();
-  return runs.flatMap((run) =>
-    ((snapshots[run.runId]?.messages ?? []) as Message[])
-      .filter((message) => {
-        if (!message.id) return true;
-        if (seenIds.has(message.id)) return false;
-        seenIds.add(message.id);
-        return true;
-      })
-      .map((message) => ({
-        message,
-        runId: run.runId,
-      })),
-  );
+const EMPTY_MESSAGE_IDS: ReadonlySet<string> = new Set();
+
+/** Reference-equality list compare, so re-capturing an unchanged run is a no-op. */
+function sameMessageList(left: Message[] | undefined, right: Message[]): boolean {
+  if (!left || left.length !== right.length) {
+    return false;
+  }
+  return left.every((message, index) => message === right[index]);
 }
 
 function sameMessage(left: Message, right: Message): boolean {
@@ -563,7 +544,10 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [activeRun, setActiveRun] = useState<ActiveRun | null>(null);
   const [cancellingRunId, setCancellingRunId] = useState<string | null>(null);
-  const [visibleMessages, setVisibleMessages] = useState<Message[]>([]);
+  // Messages captured live, keyed by the run that produced them. A run keeps its
+  // own bucket for the whole session, so it stays on screen until (and after) its
+  // persisted snapshot takes over.
+  const [runLiveMessages, setRunLiveMessages] = useState<Record<string, Message[]>>({});
   const [optimisticMessages, setOptimisticMessages] = useState<Message[]>([]);
   const [openThreadMenu, setOpenThreadMenu] = useState<string | null>(null);
   const [runs, setRuns] = useState<RunSummary[]>([]);
@@ -685,69 +669,33 @@ export function App() {
     : null;
   const currentRunStatus = currentRun?.status ?? null;
   const currentRunSnapshotLoaded = currentRunId ? Boolean(runCheckpointSnapshots[currentRunId]) : false;
-  const persistedMessageEntries = useMemo(
-    () => messageEntriesFromCheckpointSnapshots(runsInMessageOrder, runCheckpointSnapshots),
-    [runCheckpointSnapshots, runsInMessageOrder],
-  );
-  const persistedMessages = useMemo(
-    () => persistedMessageEntries.map((entry) => entry.message),
-    [persistedMessageEntries],
-  );
-  // Ids already owned by a persisted run — never re-rendered as live output.
-  const persistedMessageIds = useMemo(
-    () => messageIdSet(persistedMessages, (message) => message.id),
-    [persistedMessages],
-  );
+  // The transcript is assembled per run, in run order, from exactly one source
+  // per run: the persisted snapshot once it exists, otherwise the messages
+  // captured live for that run. Every message therefore belongs to exactly one
+  // run, so the render key `${runId}:${messageId}` is unique by construction.
+  //
+  // Keeping the live capture as the fallback is what stops a just-finished run
+  // from vanishing: E14 drops its snapshot on the terminal event and E10 refetches
+  // it, and during that window the run still renders from its own captured
+  // messages instead of falling into a gap (neither live nor persisted).
   const displayedMessageEntries = useMemo(() => {
-    const currentRunHasPersistedSnapshot =
-      currentRunId !== null &&
-      currentRunStatus !== null &&
-      PERSISTED_RUN_STATUSES.has(currentRunStatus) &&
-      currentRunSnapshotLoaded;
-    // Live messages are attributed by unique id, not by position: a message is
-    // this run's output only if it appeared after the run started (baseline) and
-    // is not already owned by a persisted run. Positional slicing depended on
-    // hydration timing, so a run started right after another finished inherited
-    // the previous run's messages and both appeared to stream.
-    const liveMessages =
-      currentRunId !== null && !currentRunHasPersistedSnapshot
-        ? selectLiveRunMessages(
-            visibleMessages,
-            liveBaselineIdsRef.current,
-            persistedMessageIds,
-            (message) => message.id,
-          )
-        : [];
-    const liveEntries = liveMessages.map((message) => ({ message, runId: currentRunId }));
-    const confirmed = [...persistedMessageEntries, ...liveEntries];
+    const entries = buildRunMessageEntries<Message>(
+      runsInMessageOrder.map((run) => run.runId),
+      (runId) => runCheckpointSnapshots[runId]?.messages as Message[] | undefined,
+      (runId) => runLiveMessages[runId],
+      (message) => message.id,
+    );
+    // Optimistic messages trail the assembled transcript until confirmed.
     const pending = optimisticMessages.filter(
-      (optimistic) =>
-        !confirmed.some(({ message }) =>
-          sameMessage(message, optimistic),
-        ),
+      (optimistic) => !entries.some(({ message }) => sameMessage(message, optimistic)),
     );
-    const combined = [
-      ...confirmed,
-      ...pending.map((message) => ({ message, runId: currentRunId })),
-    ];
-    // Collapse entries that would collide on the render key `${runId}:${id}` (the
-    // live stream can carry the same synthetic message id twice), keeping the
-    // richer copy so streamed messages render once and still grow.
-    return dedupeEntriesByKey(
-      combined,
-      (entry) => (entry.message.id ? `${entry.runId ?? "none"}:${entry.message.id}` : null),
-      (entry) => messageText(entry.message).length,
-    );
-    // liveBaselineIdsRef is intentionally not a dep: it only changes when a run
-    // becomes current, which always changes currentRunId in the same commit.
+    return [...entries, ...pending.map((message) => ({ message, runId: currentRunId }))];
   }, [
     currentRunId,
-    currentRunSnapshotLoaded,
-    currentRunStatus,
     optimisticMessages,
-    persistedMessageEntries,
-    persistedMessageIds,
-    visibleMessages,
+    runCheckpointSnapshots,
+    runLiveMessages,
+    runsInMessageOrder,
   ]);
 
   const displayedMessages = useMemo(
@@ -887,7 +835,7 @@ export function App() {
     threadIdRef.current = nextThreadId;
     threadRequestSeqRef.current += 1;
     setActiveRun(null);
-    setVisibleMessages([]);
+    setRunLiveMessages({});
     setOptimisticMessages([]);
     setRuns([]);
     setCurrentRunId(null);
@@ -1175,7 +1123,21 @@ export function App() {
     logStreamingTokens(stream.messages);
     // Mirrored so a run starting later can snapshot the ids that already exist.
     streamMessagesRef.current = stream.messages;
-    setVisibleMessages(stream.messages);
+    if (currentRunId !== null) {
+      // Route the accumulated stream into the current run's own bucket: only the
+      // messages that appeared after this run started belong to it.
+      const owned = selectLiveRunMessages(
+        stream.messages,
+        liveBaselineIdsRef.current,
+        EMPTY_MESSAGE_IDS,
+        (message) => message.id,
+      );
+      setRunLiveMessages((current) =>
+        sameMessageList(current[currentRunId], owned)
+          ? current
+          : { ...current, [currentRunId]: owned },
+      );
+    }
     setOptimisticMessages((messages) =>
       currentRunId === null
         ? messages
@@ -1350,7 +1312,7 @@ export function App() {
       threadIdRef.current = nextThreadId;
       threadRequestSeqRef.current += 1;
       setActiveRun(null);
-      setVisibleMessages([]);
+      setRunLiveMessages({});
       setOptimisticMessages([]);
       setRuns([]);
       setCurrentRunId(null);
@@ -1421,8 +1383,11 @@ export function App() {
           : run,
       ),
     );
-    setVisibleMessages([]);
     setOptimisticMessages([]);
+    // NB: the run's captured live messages are deliberately kept. Dropping its
+    // snapshot below forces a refetch, and until that lands the run still renders
+    // from its own bucket — otherwise it disappears from the transcript until the
+    // next run happens to trigger hydration.
     setRunCheckpointSnapshots((current) => {
       const { [currentRunId]: _staleSnapshot, ...rest } = current;
       return rest;

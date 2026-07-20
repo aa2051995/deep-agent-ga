@@ -49,22 +49,6 @@ export function messageIdSet<T>(messages: T[], idOf: (message: T) => string | un
 }
 
 /**
- * Collapse entries that would render under the same React key.
- *
- * The message list is keyed by `${runId}:${message.id}`, so two entries sharing
- * a runId **and** a stable message id produce a duplicate-key warning (and React
- * may drop or duplicate the row). This happens when the live stream carries the
- * same synthetic id twice (e.g. `deep-orchestrator-plan-<runId>` emitted as both
- * a streamed chunk and a final message): both survive into the live bucket.
- *
- * Entries whose `keyOf` returns `null` (no stable id — keyed by index at the
- * call site) are always kept. Among collisions the richer copy (higher `scoreOf`,
- * e.g. longer text) wins but keeps the **earliest** position, so a message that
- * streams in twice renders once and still grows to its final content.
- *
- * Generic so it stays free of the SDK types and easy to unit test.
- */
-/**
  * An id is "stable" (authoritative for identity) unless it's an optimistic
  * placeholder minted client-side before the server assigns the real id.
  */
@@ -101,26 +85,48 @@ export function sameMessageIdentity<T>(
   return typeOf(left) === typeOf(right) && textOf(left) === textOf(right);
 }
 
-export function dedupeEntriesByKey<T>(
-  entries: T[],
-  keyOf: (entry: T) => string | null,
-  scoreOf: (entry: T) => number,
-): T[] {
-  const positionByKey = new Map<string, number>();
-  const result: T[] = [];
-  for (const entry of entries) {
-    const key = keyOf(entry);
-    if (key === null) {
-      result.push(entry);
-      continue;
-    }
-    const existing = positionByKey.get(key);
-    if (existing === undefined) {
-      positionByKey.set(key, result.length);
-      result.push(entry);
-    } else if (scoreOf(entry) > scoreOf(result[existing])) {
-      result[existing] = entry;
+export type RunMessageEntry<T> = { message: T; runId: string | null };
+
+/**
+ * Assemble the transcript per run, in run order, from exactly **one** source per
+ * run: the persisted snapshot once it exists, otherwise the messages captured
+ * live for that run.
+ *
+ * Two invariants fall out of this, and they are what make the transcript
+ * deterministic:
+ *
+ * - **Every message belongs to exactly one run.** Ids are deduped globally and
+ *   the first (earliest) run to claim an id keeps it — checkpoint snapshots
+ *   repeat earlier history, so a later run must not re-claim it. The render key
+ *   `${runId}:${messageId}` is therefore unique by construction rather than by
+ *   a cleanup pass.
+ * - **A run never falls into a gap.** Keeping the live capture as the fallback
+ *   means a just-finished run still renders while its snapshot is being
+ *   (re)fetched, instead of disappearing until some later event happens to
+ *   trigger hydration.
+ *
+ * Generic over the message type so it stays free of the SDK types.
+ */
+export function buildRunMessageEntries<T>(
+  runIds: string[],
+  snapshotMessagesFor: (runId: string) => T[] | undefined,
+  liveMessagesFor: (runId: string) => T[] | undefined,
+  idOf: (message: T) => string | undefined,
+): RunMessageEntry<T>[] {
+  const entries: RunMessageEntry<T>[] = [];
+  const seenIds = new Set<string>();
+  for (const runId of runIds) {
+    const messages = snapshotMessagesFor(runId) ?? liveMessagesFor(runId) ?? [];
+    for (const message of messages) {
+      const id = idOf(message);
+      if (id) {
+        if (seenIds.has(id)) {
+          continue;
+        }
+        seenIds.add(id);
+      }
+      entries.push({ message, runId });
     }
   }
-  return result;
+  return entries;
 }

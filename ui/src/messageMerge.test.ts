@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  dedupeEntriesByKey,
+  buildRunMessageEntries,
   isStableId,
   messageIdSet,
   sameMessageIdentity,
@@ -98,50 +98,69 @@ describe("sameMessageIdentity", () => {
   });
 });
 
-type Entry = { runId: string | null; message: Msg };
-const entry = (runId: string | null, message: Msg): Entry => ({ runId, message });
+describe("buildRunMessageEntries", () => {
+  const build = (
+    runIds: string[],
+    snapshots: Record<string, Msg[]>,
+    live: Record<string, Msg[]>,
+  ) => buildRunMessageEntries<Msg>(runIds, (r) => snapshots[r], (r) => live[r], idOf);
 
-// Mirrors App.tsx: key `${runId}:${id}`, or null for id-less entries (index-keyed).
-const keyOf = (e: Entry): string | null =>
-  e.message.id ? `${e.runId ?? "none"}:${e.message.id}` : null;
-const scoreOf = (e: Entry): number => e.message.text.length;
-
-describe("dedupeEntriesByKey", () => {
-  it("collapses same runId + same id, keeping the richer copy in the first position", () => {
-    const plan = "deep-orchestrator-plan-f45a1c99";
-    const entries = [
-      entry("f45a1c99", h("h1", "question")),
-      entry("f45a1c99", ai(plan, "Plan")), // partial streamed chunk
-      entry("f45a1c99", ai(plan, "Plan: step 1, step 2")), // final, longer
-    ];
-    expect(dedupeEntriesByKey(entries, keyOf, scoreOf)).toEqual([
-      entry("f45a1c99", h("h1", "question")),
-      entry("f45a1c99", ai(plan, "Plan: step 1, step 2")),
+  it("keeps a finished run visible from its live bucket while its snapshot refetches", () => {
+    // The reported bug: run A finished, E14 dropped its snapshot, run B started.
+    // A must still render (from live) instead of vanishing until a third run.
+    const entries = build(
+      ["runA", "runB"],
+      {}, // neither snapshot loaded yet
+      { runA: [h("hA", "question A"), ai("finalA", "answer A")], runB: [h("hB", "question B")] },
+    );
+    expect(entries).toEqual([
+      { message: h("hA", "question A"), runId: "runA" },
+      { message: ai("finalA", "answer A"), runId: "runA" },
+      { message: h("hB", "question B"), runId: "runB" },
     ]);
   });
 
-  it("keeps the same id under different runIds (keys differ)", () => {
-    const entries = [entry("runA", ai("m1", "x")), entry("runB", ai("m1", "y"))];
-    expect(dedupeEntriesByKey(entries, keyOf, scoreOf)).toHaveLength(2);
+  it("prefers the persisted snapshot over the live bucket once it arrives", () => {
+    const entries = build(
+      ["runA"],
+      { runA: [h("hA", "question A"), ai("finalA", "final persisted answer")] },
+      { runA: [h("hA", "question A"), ai("finalA", "partial live answer")] },
+    );
+    expect(entries.map((e) => e.message)).toEqual([
+      h("hA", "question A"),
+      ai("finalA", "final persisted answer"),
+    ]);
   });
 
-  it("never collapses id-less entries (they are index-keyed at render)", () => {
-    const entries = [
-      entry("runA", { type: "ai", text: "a" }),
-      entry("runA", { type: "ai", text: "a" }),
-    ];
-    expect(dedupeEntriesByKey(entries, keyOf, scoreOf)).toHaveLength(2);
+  it("attributes each id to exactly one run when snapshots repeat earlier history", () => {
+    // runB's snapshot also carries runA's messages; the earliest run keeps them,
+    // so `${runId}:${id}` render keys stay unique.
+    const entries = build(
+      ["runA", "runB"],
+      {
+        runA: [h("hA", "A"), ai("aA", "A answer")],
+        runB: [h("hA", "A"), ai("aA", "A answer"), h("hB", "B"), ai("aB", "B answer")],
+      },
+      {},
+    );
+    expect(entries).toEqual([
+      { message: h("hA", "A"), runId: "runA" },
+      { message: ai("aA", "A answer"), runId: "runA" },
+      { message: h("hB", "B"), runId: "runB" },
+      { message: ai("aB", "B answer"), runId: "runB" },
+    ]);
+    const keys = entries.map((e) => `${e.runId}:${e.message.id}`);
+    expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it("preserves order and first-seen position of the winner", () => {
-    const entries = [
-      entry("r", ai("dup", "short")),
-      entry("r", h("h2", "later")),
-      entry("r", ai("dup", "much longer content")),
-    ];
-    expect(dedupeEntriesByKey(entries, keyOf, scoreOf)).toEqual([
-      entry("r", ai("dup", "much longer content")),
-      entry("r", h("h2", "later")),
+  it("keeps id-less messages (never collapsed, index-keyed at render)", () => {
+    const entries = build(["r"], {}, { r: [{ type: "ai", text: "a" }, { type: "ai", text: "a" }] });
+    expect(entries).toHaveLength(2);
+  });
+
+  it("skips runs with neither a snapshot nor a live bucket", () => {
+    expect(build(["runA", "runB"], { runB: [h("hB", "B")] }, {})).toEqual([
+      { message: h("hB", "B"), runId: "runB" },
     ]);
   });
 });

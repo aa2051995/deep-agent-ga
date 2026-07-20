@@ -17,7 +17,7 @@ runCheckpointSnapshots ───────────┘                    �
 
 - **M4** `runsInMessageOrder` — this thread's runs, oldest→newest.
 - **M5** `persistedMessageEntries` — `messageEntriesFromCheckpointSnapshots`: flattens each run's snapshot messages, **deduping by message id** so a message shared across checkpoints appears once, attributed to the earliest run.
-- **M7** `displayedMessageEntries` — persisted entries + (for the current, not-yet-persisted run) a live tail from `selectLiveRunMessages(visibleMessages, liveBaselineIds, persistedMessageIds)` + un-confirmed optimistic messages. Live attribution is **by unique id**: a message is the current run's output only if it appeared *after* that run started (`liveBaselineIdsRef`, captured at run start) and is not already owned by a persisted run.
+- **M7** `displayedMessageEntries` — assembled **per run** by `buildRunMessageEntries`, in run order, from exactly one source per run: the persisted snapshot once it exists, otherwise that run's live bucket (`runLiveMessages[runId]`, filled by E2 via `selectLiveRunMessages` against the run's start baseline). Optimistic messages trail until confirmed. Ids are deduped globally with the earliest run winning, so each message belongs to exactly one run.
 
 ## Lazy hydration — E10
 
@@ -87,5 +87,5 @@ sequenceDiagram
 
 - `ui/src/App.tsx` → E10, M4–M8, `messageEntriesFromCheckpointSnapshots`, `resetVisibleThread`, "Load earlier runs" button
 - `ui/src/runHydration.ts` → `selectRunsToHydrate`, `hasEarlierUnhydratedRuns`
-- `ui/src/messageMerge.ts` → `selectLiveRunMessages`, `messageIdSet`, `sameMessageIdentity`, `dedupeEntriesByKey`
+- `ui/src/messageMerge.ts` → `buildRunMessageEntries`, `selectLiveRunMessages`, `messageIdSet`, `sameMessageIdentity`
 - `ui/src/api.ts` → `getRunCheckpointSnapshot`, `listRuns`

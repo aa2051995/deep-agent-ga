@@ -194,12 +194,20 @@ For each state: **updaters** (setter call sites), **readers**, **effects that de
 - **Memos depending:** none.
 - **Callbacks modifying:** `stopActiveRun`.
 
-### 10. `visibleMessages`
-- **Updated by:** `setVisibleMessages` — E2 (from `stream.messages`), `resetVisibleThread`, E11, E14.
-- **Read by:** `displayedMessageEntries` (M7) via `selectLiveRunMessages` (`messageMerge.ts`).
-- **Effects depending:** none (E2 writes it).
+### 10. `runLiveMessages` (`Record<runId, Message[]>`)
+- **Updated by:** `setRunLiveMessages` — E2 (routes `stream.messages` into the current run's bucket via `selectLiveRunMessages`), `resetVisibleThread`, E11. **Not** cleared by E14.
+- **Read by:** `displayedMessageEntries` (M7) via `buildRunMessageEntries` (`messageMerge.ts`).
 - **Memos depending:** M7.
-- **Note:** `stream.messages` accumulates the whole thread's history with **no run attribution**. M7 isolates the current run's output **by unique id**, not by position: a message is live only if it is absent from `liveBaselineIdsRef` (the ids that existed the moment the run became current — captured in `onCreated`, `joinRunStream`, and `continueActiveRun`) **and** absent from `persistedMessageIds`. Two earlier heuristics failed here: "slice from the last human message" mis-bounded joined/resumed runs, and "slice after the last already-persisted message" depended on hydration timing — after a run finished, E14 drops its snapshot and E10 refetches it, so a run started inside that window inherited the previous run's messages and both appeared to stream. The baseline is captured at run start and never depends on whether a snapshot has loaded.
+- **Note:** `stream.messages` accumulates the whole thread with **no run attribution**, so it is split into per-run buckets. A message enters run R's bucket only if it is absent from `liveBaselineIdsRef` — the ids that existed the moment R became current, captured in `onCreated`, `joinRunStream`, and `continueActiveRun`.
+
+  M7 then assembles the transcript per run, in run order, from exactly **one** source per run: the persisted snapshot once it exists, otherwise that run's live bucket. Ids are deduped globally with the earliest run winning, so every message belongs to exactly one run and the render key `${runId}:${messageId}` is unique **by construction**.
+
+  Three earlier designs failed here, each replaced by this one:
+  1. "slice from the last human message" — mis-bounded joined/resumed runs.
+  2. "slice after the last already-persisted message" — depended on hydration timing, so a run started right after another finished inherited the previous run's messages and both appeared to stream.
+  3. a single `visibleMessages` bucket owned by whichever run was current — a finished run had nowhere to live, so once E14 dropped its snapshot it vanished from the transcript until a later run happened to trigger hydration.
+
+  Keeping each run's bucket (and **not** clearing it in E14) is what closes that gap: the run renders from its own messages until its snapshot supersedes them.
 - **Callbacks modifying:** `resetVisibleThread`.
 
 ### 11. `optimisticMessages`
