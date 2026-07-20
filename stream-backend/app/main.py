@@ -34,7 +34,7 @@ from .models import (
     new_id,
     now_iso,
 )
-from .event_bus import PublishingRepository, create_event_broker
+from .event_bus import EventBrokerUnavailable, PublishingRepository, create_event_broker
 from .projections import project_run_checkpoints, project_subagents
 from .protocol import matches_subscription, sse_frame
 from .service import ProtocolService, merge_values
@@ -410,7 +410,19 @@ async def stream_thread_events(
     )
     event_filter = RunStreamFilter(modes=modes or {"run_modes"}, run_id=run_id)
     stream_state: dict[str, dict[str, dict[str, str]]] = {}
-    managed = await stream_manager.subscribe_thread(thread_id, since)
+    try:
+        managed = await stream_manager.subscribe_thread(thread_id, since)
+    except EventBrokerUnavailable:
+        # Already logged in event_bus.py. End the stream cleanly instead of
+        # raising: once headers are sent for a StreamingResponse, raising here
+        # crashes the ASGI response with an unhandled-exception traceback
+        # rather than a normal close. Native EventSource clients (e.g. the
+        # UI's lifecycle monitor) treat a closed connection as a disconnect
+        # and auto-reconnect; `retry:` hints the delay so they don't hammer an
+        # unreachable broker.
+        yield "retry: 5000\n"
+        yield ": event broker unavailable\n\n"
+        return
     async for event in stream_manager.iter_events(managed, request):
         if event is None:
             # logger.debug("thread.stream.heartbeat thread_id=%s run_id=%s", thread_id, run_id)
@@ -584,10 +596,17 @@ async def protocol_events(thread_id: str, body: dict, request: Request) -> Strea
             namespaces=namespaces,
             depth=depth,
         )
-        managed = await stream_manager.subscribe_thread(
-            thread_id,
-            since if isinstance(since, int) else None,
-        )
+        try:
+            managed = await stream_manager.subscribe_thread(
+                thread_id,
+                since if isinstance(since, int) else None,
+            )
+        except EventBrokerUnavailable:
+            # See stream_thread_events for why this ends cleanly rather than
+            # raising into an already-started StreamingResponse.
+            yield "retry: 5000\n"
+            yield ": event broker unavailable\n\n"
+            return
         async for event in stream_manager.iter_events(managed, request):
             if event is None:
                 # logger.debug("protocol.events.heartbeat thread_id=%s", thread_id)
@@ -708,7 +727,16 @@ async def protocol_events_websocket(websocket: WebSocket, thread_id: str) -> Non
 
     async def send_loop() -> None:
         nonlocal cursor
-        managed = await stream_manager.subscribe_thread(thread_id, cursor)
+        try:
+            managed = await stream_manager.subscribe_thread(thread_id, cursor)
+        except EventBrokerUnavailable as exc:
+            logger.warning("protocol.websocket.subscribe_failed thread_id=%s error=%s", thread_id, exc)
+            closed.set()
+            try:
+                await websocket.close(code=1013, reason="event broker unavailable")
+            except Exception:
+                pass
+            return
         async for event in stream_manager.iter_events(managed, None):
             if closed.is_set():
                 return
@@ -788,7 +816,15 @@ async def stream_stateful_run(thread_id: str, payload: dict, request: Request) -
         )
         event_filter = RunStreamFilter(modes={"run_modes"}, run_id=run_id)
         stream_state: dict[str, dict[str, dict[str, str]]] = {}
-        managed = await stream_manager.subscribe_thread(thread_id, since)
+        try:
+            managed = await stream_manager.subscribe_thread(thread_id, since)
+        except EventBrokerUnavailable:
+            # See stream_thread_events for why this ends cleanly rather than
+            # raising. Notably: bail out BEFORE start_run_task below, so a
+            # broker outage never starts a run nobody can stream.
+            yield "retry: 5000\n"
+            yield ": event broker unavailable\n\n"
+            return
         run = await repo.get_run(thread_id, run_id)
         if run is None:
             await managed.close()

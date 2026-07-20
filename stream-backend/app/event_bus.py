@@ -14,6 +14,14 @@ from .store import Repository
 
 logger = logging.getLogger("stream_backend.event_bus")
 
+
+class EventBrokerUnavailable(RuntimeError):
+    """Raised when subscribing to the event broker fails (e.g. RabbitMQ Streams
+    is not reachable). Distinct from a generic error so SSE endpoints can catch
+    it and end the stream cleanly instead of crashing the ASGI response with an
+    unhandled exception — publishing already degrades gracefully on a broker
+    hiccup (see PublishingRepository); subscribing did not."""
+
 # RabbitMQ Streams closes the producer connection ("frame too large") if a single
 # published message exceeds the negotiated frame size. Agent tool outputs can be
 # huge (e.g. a downloaded document), so every event body is bounded well under the
@@ -565,17 +573,35 @@ class RabbitMQStreamBroker:
         except Exception as exc:
             raise RuntimeError("rstream is required for RabbitMQ subscriptions.") from exc
 
-        stream_name = await self._ensure_stream(thread_id)
-        events: asyncio.Queue[ProtocolEvent] = asyncio.Queue(maxsize=1000)
-        consumer = Consumer(
-            host=self.settings.host,
-            port=self.settings.port,
-            username=self.settings.username,
-            password=self.settings.password,
-            vhost=self.settings.vhost,
-            connection_name=f"langgraphjs-stream-backend-consumer-{thread_id}",
-        )
-        await consumer.start()
+        try:
+            stream_name = await self._ensure_stream(thread_id)
+            events: asyncio.Queue[ProtocolEvent] = asyncio.Queue(maxsize=1000)
+            consumer = Consumer(
+                host=self.settings.host,
+                port=self.settings.port,
+                username=self.settings.username,
+                password=self.settings.password,
+                vhost=self.settings.vhost,
+                connection_name=f"langgraphjs-stream-backend-consumer-{thread_id}",
+            )
+            await consumer.start()
+        except (OSError, asyncio.TimeoutError) as exc:
+            # RabbitMQ Streams (host:port) unreachable. Unlike publishing — which
+            # is deliberately best-effort so a broker hiccup can't fail a run —
+            # subscribing has no fallback: the caller needs the events. Raise a
+            # distinct, catchable error instead of letting the raw connection
+            # error propagate into an SSE endpoint's async generator, where it
+            # crashes the ASGI response with an unhandled-exception traceback.
+            logger.error(
+                "event_broker.rabbitmq.subscribe_connect_failed thread_id=%s host=%s port=%s error=%s",
+                thread_id,
+                self.settings.host,
+                self.settings.port,
+                exc,
+            )
+            raise EventBrokerUnavailable(
+                f"Could not connect to RabbitMQ Streams at {self.settings.host}:{self.settings.port}"
+            ) from exc
 
         async with self._lock:
             if stream_name not in self._subscription_consumers:
