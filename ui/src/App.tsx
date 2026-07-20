@@ -20,7 +20,13 @@ import { DEFAULT_API_URL, messageText, useDeepResearchStream } from "./stream";
 import type { DebugEvent, DeepResearchStream } from "./stream";
 import { selectInputRequests, subagentStreamToCard } from "./selectors";
 import { hasEarlierUnhydratedRuns, selectRunsToHydrate } from "./runHydration";
-import { buildRunMessageEntries, messageIdSet, sameMessageIdentity, selectLiveRunMessages } from "./messageMerge";
+import {
+  buildRunMessageEntries,
+  messageIdSet,
+  persistedOrLive,
+  sameMessageIdentity,
+  selectLiveRunMessages,
+} from "./messageMerge";
 import type { InputRequest, ProtocolEvent, RunCheckpointSnapshot, RunSummary, SubagentCard, ThreadSummary } from "./types";
 
 const CURRENT_THREAD_KEY = "deep-research-ui:current-thread";
@@ -190,6 +196,19 @@ function sameMessageList(left: Message[] | undefined, right: Message[]): boolean
     return false;
   }
   return left.every((message, index) => message === right[index]);
+}
+
+/**
+ * Structural compare for subagent cards, so re-capturing an unchanged run is a
+ * no-op. Unlike messages (stable objects from the SDK), subagentCardsForLiveRun
+ * rebuilds every card on each call, so reference equality would never match —
+ * a cheap JSON compare is the practical option for these small arrays.
+ */
+function sameSubagentCards(left: SubagentCard[] | undefined, right: SubagentCard[]): boolean {
+  if (!left) {
+    return false;
+  }
+  return left.length === right.length && JSON.stringify(left) === JSON.stringify(right);
 }
 
 function sameMessage(left: Message, right: Message): boolean {
@@ -548,6 +567,10 @@ export function App() {
   // own bucket for the whole session, so it stays on screen until (and after) its
   // persisted snapshot takes over.
   const [runLiveMessages, setRunLiveMessages] = useState<Record<string, Message[]>>({});
+  // Subagent cards captured live, keyed by run — the card equivalent of
+  // runLiveMessages. Retained so a finished run's cards survive the window where
+  // its snapshot has been dropped and is being refetched.
+  const [runSubagentCards, setRunSubagentCards] = useState<Record<string, SubagentCard[]>>({});
   const [optimisticMessages, setOptimisticMessages] = useState<Message[]>([]);
   const [openThreadMenu, setOpenThreadMenu] = useState<string | null>(null);
   const [runs, setRuns] = useState<RunSummary[]>([]);
@@ -708,6 +731,15 @@ export function App() {
     return entry?.message.type === "human" ? entry.runId : null;
   }
 
+  // Cards for a run that is not the actively-streaming one: the persisted
+  // snapshot's cards once it has content, otherwise this run's own retained
+  // live cards (runSubagentCards) — never a hard empty. Without this fallback,
+  // a run's cards blinked out the moment E14 dropped its snapshot on completion
+  // and came back only once E10 refetched it (or, before that, not at all).
+  function retainedSubagentCards(runId: string): SubagentCard[] {
+    return persistedOrLive(runCheckpointSnapshots[runId]?.subagents, runSubagentCards[runId]);
+  }
+
   function subagentCardsForMessage(index: number): SubagentCard[] {
     const runId = runIdForUserMessage(index);
     if (!runId) {
@@ -720,13 +752,7 @@ export function App() {
       logger.token("subagentCardsForMessage.live", { runId, messageIndex: index });
       return liveRunSubagentCards;
     }
-    const run = runs.find((item) => item.runId === runId);
-    const snapshot = runCheckpointSnapshots[runId];
-    if (snapshot && run && PERSISTED_RUN_STATUSES.has(run.status)) {
-      return snapshot.subagents;
-    }
- 
-    return snapshot ? snapshot.subagents : [];
+    return retainedSubagentCards(runId);
   }
 
   function actionsForMessage(index: number): RunAction[] {
@@ -734,16 +760,11 @@ export function App() {
     if (!runId) {
       return [];
     }
-    const run = runs.find((item) => item.runId === runId);
-    const snapshot = runCheckpointSnapshots[runId];
-    if (snapshot && run && PERSISTED_RUN_STATUSES.has(run.status)) {
-      return actionRowsFromSubagents(snapshot.subagents);
-    }
-    if (runId === currentRunId) {
+    if (runId === currentRunId && (currentRunStatus === null || !PERSISTED_RUN_STATUSES.has(currentRunStatus))) {
       logger.token("actionsForMessage.live", { runId, messageIndex: index });
       return liveRunActions;
     }
-    return snapshot ? actionRowsFromSubagents(snapshot.subagents) : [];
+    return actionRowsFromSubagents(retainedSubagentCards(runId));
   }
 
   function logStreamingTokens(messages: Message[]): void {
@@ -836,6 +857,7 @@ export function App() {
     threadRequestSeqRef.current += 1;
     setActiveRun(null);
     setRunLiveMessages({});
+    setRunSubagentCards({});
     setOptimisticMessages([]);
     setRuns([]);
     setCurrentRunId(null);
@@ -1149,6 +1171,21 @@ export function App() {
           ),
     );
   }, [currentRunId, stream.isLoading, stream.messages]);
+//E2b
+  useEffect(() => {
+    if (currentRunId === null || liveRunSubagentCards.length === 0) {
+      return;
+    }
+    // Retain the current run's subagent cards the same way E2 retains its
+    // messages: without this, a run's cards had no home once E14 dropped its
+    // snapshot on completion, so they disappeared until the snapshot refetched
+    // (or, for runs beyond the hydration window, indefinitely).
+    setRunSubagentCards((current) =>
+      sameSubagentCards(current[currentRunId], liveRunSubagentCards)
+        ? current
+        : { ...current, [currentRunId]: liveRunSubagentCards },
+    );
+  }, [currentRunId, liveRunSubagentCards]);
 //E3
   useLayoutEffect(() => {
     if (!shouldStickToBottomRef.current) {
@@ -1323,6 +1360,7 @@ export function App() {
       threadRequestSeqRef.current += 1;
       setActiveRun(null);
       setRunLiveMessages({});
+      setRunSubagentCards({});
       setOptimisticMessages([]);
       setRuns([]);
       setCurrentRunId(null);
@@ -1394,10 +1432,11 @@ export function App() {
       ),
     );
     setOptimisticMessages([]);
-    // NB: the run's captured live messages are deliberately kept. Dropping its
-    // snapshot below forces a refetch, and until that lands the run still renders
-    // from its own bucket — otherwise it disappears from the transcript until the
-    // next run happens to trigger hydration.
+    // NB: the run's captured live messages AND subagent cards are deliberately
+    // kept (runLiveMessages / runSubagentCards). Dropping its snapshot below
+    // forces a refetch, and until that lands the run still renders from its own
+    // retained data — otherwise it disappears from the transcript (or loses its
+    // subagent cards) until the next event happens to trigger hydration.
     setRunCheckpointSnapshots((current) => {
       const { [currentRunId]: _staleSnapshot, ...rest } = current;
       return rest;

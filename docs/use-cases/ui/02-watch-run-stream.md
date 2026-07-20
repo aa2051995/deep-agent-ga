@@ -25,15 +25,16 @@ A single model-token frame arrives on **both** the SDK channel and ES1. React ba
    - **M2** `liveRunActions` recomputes (`stream.debugEvents` dep) — rebuilds the "Searching…/Reading…/Delegating…" rows.
    - **M3** `inputRequests` recomputes (`stream` dep) — usually empty mid-run.
    - `currentRun`/`currentRunStatus` recomputed (plain).
-   - **M7** recomputes only if `visibleMessages`/`optimistic`/persisted changed — on a *pure* debugEvents pass it may be cached; on a `stream.messages` pass E2 will change `visibleMessages` next.
+   - **M7** recomputes only if `runLiveMessages`/`optimisticMessages`/`runCheckpointSnapshots`/`runsInMessageOrder` changed — on a *pure* debugEvents pass it may be cached; on a `stream.messages` pass E2 will change `runLiveMessages` next.
 2. **Commit** — bubbles/cards updated.
 3. **Layout — E3** runs if **M8** (`displayedMessages`) changed → autoscroll to the newest token (respecting `shouldStickToBottomRef`, maintained by **E4**'s scroll listener).
 4. **Paint.**
 5. **Passive effects** (only changed deps):
-   - **E2** (`stream.messages`) → `logStreamingTokens(stream.messages)` (diff-logs the appended token), `setVisibleMessages(stream.messages)`, prune confirmed optimistic messages. This sets state → schedules the next pass where **M7→M8→E3** render the token.
+   - **E2** (`stream.messages`) → `logStreamingTokens(stream.messages)` (diff-logs the appended token), routes `stream.messages` into `runLiveMessages[currentRunId]` via `selectLiveRunMessages`, prunes confirmed optimistic messages. This sets state → schedules the next pass where **M7→M8→E3** render the token.
+   - **E2b** (`liveRunSubagentCards`) → retains M1's cards into `runSubagentCards[currentRunId]` (structural-compare bailed via `sameSubagentCards` when unchanged).
    - **E14** (`stream.debugEvents`) → scans for a terminal lifecycle event; none yet, returns.
 
-So a token's journey is **two** pipeline passes: pass 1 ingests it into `stream.messages`; E2 copies it to `visibleMessages`; pass 2 recomputes M7/M8 and E3 scrolls it into view.
+So a token's journey is **two** pipeline passes: pass 1 ingests it into `stream.messages`; E2 copies it into `runLiveMessages[currentRunId]`; pass 2 recomputes M7/M8 and E3 scrolls it into view.
 
 ## Subagent activity
 
@@ -41,7 +42,7 @@ When a `task` tool event arrives on ES1, **M1** (`subagentCardsForLiveRun`) merg
 - event-derived cards from `subagentCardsFromEvents(protocolEventsFromDebugEvents(runEvents))`, and
 - SDK `stream.subagents` via `subagentStreamToCard`,
 
-producing the cards passed to `subagentCardsForMessage(index)` → `<MessageBubble subagents=…>`. `stream.activeSubagents.length` drives the topbar `statusText` ("N subagents active").
+producing the cards passed to `subagentCardsForMessage(index)` → `<MessageBubble subagents=…>`. **E2b** retains this into `runSubagentCards[currentRunId]` after every recompute, so the cards survive the run's own completion (see [UI Flow 6](06-browse-history.md)) instead of only existing transiently in the M1 memo. `stream.activeSubagents.length` drives the topbar `statusText` ("N subagents active").
 
 ## Phase diagram
 
@@ -58,7 +59,8 @@ sequenceDiagram
         R->>R: render → M1, M2, M3 recompute
         R->>DOM: commit
         R->>DOM: E3 autoscroll (if M8 changed)
-        R->>R: E2 → setVisibleMessages (+ prune optimistic)
+        R->>R: E2 → route into runLiveMessages[currentRunId] (+ prune optimistic)
+        R->>R: E2b → retain into runSubagentCards[currentRunId]
         R->>R: E14 scan debugEvents (no terminal)
         R->>R: (next pass) M7→M8→E3 render token
     end
@@ -73,10 +75,10 @@ sequenceDiagram
 | Channel event | State change | Memos | Effects |
 |---|---|---|---|
 | SDK token | `stream.messages` | M1, M3 (M7 next pass) | E2 → then E3 |
-| ES1 frame | `debugEvents` (MS1) | M1, M2 | E14 |
+| ES1 frame | `debugEvents` (MS1) | M1, M2 | E2b, E14 |
 | lifecycle running/terminal | `activeRun` (maybe) | — | E15, E16 handlers |
 
 ## Related code
 
 - `ui/src/stream.ts` → ES1, `onMessageEvent/onToolEvent/onTaskEvent`, MS1, `appendDebugEvent`
-- `ui/src/App.tsx` → E2, E3, E4, E14, M1, M2, `subagentCardsForLiveRun`, `logStreamingTokens`
+- `ui/src/App.tsx` → E2, E2b, E3, E4, E14, M1, M2, `subagentCardsForLiveRun`, `logStreamingTokens`

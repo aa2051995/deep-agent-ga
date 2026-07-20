@@ -85,6 +85,20 @@ export function sameMessageIdentity<T>(
   return typeOf(left) === typeOf(right) && textOf(left) === textOf(right);
 }
 
+/**
+ * Pick a run's persisted data over its live-captured data — but only once the
+ * persisted copy actually has content.
+ *
+ * An **empty** persisted result counts as absent, not as "this run produced
+ * nothing". The backend can serve one briefly (a run flips to a terminal status
+ * before its snapshot row is written); treating `[]` as authoritative made a
+ * run's messages/cards vanish the instant it turned persisted. A real run
+ * always produces at least the user's message, so this fallback is safe.
+ */
+export function persistedOrLive<T>(persisted: T[] | undefined, live: T[] | undefined): T[] {
+  return persisted && persisted.length > 0 ? persisted : live ?? [];
+}
+
 export type RunMessageEntry<T> = { message: T; runId: string | null };
 
 /**
@@ -122,8 +136,7 @@ export function buildRunMessageEntries<T>(
   const entries: RunMessageEntry<T>[] = [];
   const seenIds = new Set<string>();
   for (const runId of runIds) {
-    const snapshot = snapshotMessagesFor(runId);
-    const messages = snapshot && snapshot.length > 0 ? snapshot : liveMessagesFor(runId) ?? [];
+    const messages = persistedOrLive(snapshotMessagesFor(runId), liveMessagesFor(runId));
     for (const message of messages) {
       const id = idOf(message);
       if (id) {

@@ -34,8 +34,9 @@ Setters #1–#4 are **batched** into one re-render (Render pass R1).
 
 Inside `stream.submit`, the SDK POSTs the `run.start` command, then fires **`onCreated(run)`** (stream.ts:186):
 
-1. `onRunCreated(run)` → the callback passed from `App` (line 603):
+1. `onRunCreated(run)` → the callback passed from `App`:
    - If `run.thread_id !== threadIdRef.current` → ignored (stale thread).
+   - `liveBaselineIdsRef.current = messageIdSet(streamMessagesRef.current, …)` — snapshots the message ids that already exist *before* this run's output starts arriving. Everything absent from this set (once the SDK starts streaming) belongs to the new run — see [UI Flow 6](06-browse-history.md).
    - `setCurrentRunId(run.run_id)` — setter.
    - `setRuns(prepend {status:"running"})` — setter.
 2. `setDebugEvents(append metadata event)` — setter in the hook.
@@ -44,7 +45,7 @@ Inside `stream.submit`, the SDK POSTs the `run.start` command, then fires **`onC
 ### Render pass R2 (run becomes current)
 
 - Changed state: `currentRunId`, `runs`, (`threadId`, `threads` if new).
-- Memos: **M1** (`currentRunId`,`stream`), **M2** (`currentRunId`), **M3** (`currentRunId`,`stream`), **M4** (`runs`), **M5** (via M4), **M6**, **M7** (`currentRunId`), **M8** all recompute.
+- Memos: **M1** (`currentRunId`,`stream`), **M2** (`currentRunId`), **M3** (`currentRunId`,`stream`), **M4** (`runs`), **M7** (`currentRunId`, and `runsInMessageOrder` via M4), **M8** all recompute.
 - Passive effects that re-run because their deps changed:
   - **E2** (`currentRunId`) — reconciles optimistic vs stream messages.
   - **E5** (`currentRunId`,`threadId`) — refreshes the mirror refs.
@@ -61,14 +62,14 @@ For every model token / tool event, two channels push updates (see [UI Flow 2](0
 - **SDK** updates `stream.messages`/`isLoading` → new `stream` identity → **R(n)**.
 - **ES1** appends to `debugEvents` → new `debugEvents` → **MS1** → **R(n)**.
 
-Each such render: **M1/M2** recompute (live subagent cards + action rows), **E2** copies `stream.messages` → `visibleMessages` (→ **M7**/**M8** → **E3** autoscroll), and **E14** scans `debugEvents` for a terminal event (none yet). The `logStreamingTokens` helper (called from E2) diff-logs each appended token.
+Each such render: **M1/M2** recompute (live subagent cards + action rows), **E2** routes `stream.messages` into `runLiveMessages[currentRunId]` (→ **M7**/**M8** → **E3** autoscroll) and **E2b** retains the live cards into `runSubagentCards[currentRunId]`, and **E14** scans `debugEvents` for a terminal event (none yet). The `logStreamingTokens` helper (called from E2) diff-logs each appended token.
 
 ### Completion
 
 When the run finishes, a `lifecycle` frame (`completed`) arrives on `debugEvents`:
 
-- **E14** finds the terminal event for `currentRunId`, marks it handled, sets the run's status (`success`), clears `visibleMessages`/`optimisticMessages`, drops the stale snapshot, **`setCurrentRunId(null)`**, `clearDebugEvents()`, and `refreshRuns(threadId)`.
-- `refreshRuns` → `setRuns(next)` → **E10** now sees a *persisted* run and hydrates its checkpoint snapshot → `setRunCheckpointSnapshots` → **M5/M6/M7/M8** rebuild the transcript from the durable snapshot → **E13** confirms terminal + snapshot-loaded and keeps `currentRunId` null.
+- **E14** finds the terminal event for `currentRunId`, marks it handled, sets the run's status (`success`) in `runs`, clears `optimisticMessages`, drops the stale snapshot from `runCheckpointSnapshots`, `clearDebugEvents()`, and `refreshRuns(threadId)`. It deliberately does **not** clear `runLiveMessages`/`runSubagentCards` or `currentRunId` — the run keeps rendering from its own retained data (`persistedOrLive`) through the gap where the snapshot has been dropped but not yet refetched.
+- `refreshRuns` → `setRuns(next)` → **E10** now sees a *persisted* run and hydrates its checkpoint snapshot (once it's non-empty — see [UI Flow 6](06-browse-history.md#the-empty-snapshot-race)) → `setRunCheckpointSnapshots` → **M7/M8** rebuild the transcript, now sourcing this run from the snapshot instead of `runLiveMessages` → **E13** sees `currentRunSnapshotLoaded` flip true and releases `currentRunId` (no visible change — M7 was already rendering this run's content).
 
 `submit()`'s own tail (`await stream.submit` resolved) then runs `refreshThreads()` + `refreshRuns()` to reconcile the sidebar and run list.
 
@@ -95,8 +96,8 @@ sequenceDiagram
         R-->>U: render → M1/M2 recompute, E2→M7→M8→E3
     end
     H->>R: lifecycle "completed" on debugEvents
-    R->>R: E14 → setCurrentRunId(null), refreshRuns
-    R->>R: E10 hydrate snapshot → M5..M8 rebuild transcript
+    R->>R: E14 → drop snapshot, refreshRuns (run keeps rendering from runLiveMessages/runSubagentCards)
+    R->>R: E10 hydrate snapshot → M7/M8 rebuild transcript from the snapshot → E13 releases currentRunId
 ```
 
 ## Re-render cascade summary
@@ -105,12 +106,12 @@ sequenceDiagram
 |---|---|---|
 | `optimisticMessages` | M7, M8 | E3 (layout) |
 | `debugEvents` (MS1) | M1, M2, (MS1) | E14 |
-| `currentRunId` | M1, M2, M3, M7 | E2, E5, E10, E13, E15 |
-| `runs` | M4, M5, M6, M7 | E10, E15 |
+| `currentRunId` | M1, M2, M3, M7 | E2, E2b, E5, E10, E13, E15 |
+| `runs` | M4, M7 | E10, E15 |
 | `threadId` (new thread) | M4, M7 | E5, E9, E16 |
-| `runCheckpointSnapshots` | M5, M6, M7 | E10, E13 |
+| `runCheckpointSnapshots` | M7 | E10, E13 |
 
 ## Related code
 
-- `ui/src/App.tsx` → `submit`, `onCreated` callback (589–626), E2, E10, E13, E14
+- `ui/src/App.tsx` → `submit`, `onCreated` callback, E2, E2b, E10, E13, E14
 - `ui/src/stream.ts` → `useDeepResearchStream`, `onCreated`, ES1

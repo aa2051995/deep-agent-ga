@@ -3,6 +3,7 @@ import {
   buildRunMessageEntries,
   isStableId,
   messageIdSet,
+  persistedOrLive,
   sameMessageIdentity,
   selectLiveRunMessages,
 } from "./messageMerge";
@@ -95,6 +96,29 @@ describe("sameMessageIdentity", () => {
   it("falls back to content when an id is missing", () => {
     expect(same({ type: "human", text: "hi" }, h("h1", "hi"))).toBe(true);
     expect(same({ type: "human", text: "hi" }, h("h1", "bye"))).toBe(false);
+  });
+});
+
+describe("persistedOrLive", () => {
+  it("prefers a non-empty persisted list over the live one", () => {
+    expect(persistedOrLive(["a", "b"], ["c"])).toEqual(["a", "b"]);
+  });
+
+  it("falls back to live when persisted is EMPTY (the terminal-status race)", () => {
+    // A run can flip to a terminal status before its persisted row is written,
+    // so the backend briefly serves an empty result. That must not be taken as
+    // "this run produced nothing" — it must fall back to the live capture.
+    expect(persistedOrLive([], ["c", "d"])).toEqual(["c", "d"]);
+  });
+
+  it("falls back to live when persisted is undefined (not loaded yet)", () => {
+    expect(persistedOrLive(undefined, ["c"])).toEqual(["c"]);
+  });
+
+  it("returns an empty array when neither source has anything", () => {
+    expect(persistedOrLive(undefined, undefined)).toEqual([]);
+    expect(persistedOrLive([], undefined)).toEqual([]);
+    expect(persistedOrLive([], [])).toEqual([]);
   });
 });
 

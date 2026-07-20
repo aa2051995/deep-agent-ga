@@ -70,41 +70,40 @@ Ids match the `//E…` comments in [`App.tsx`](../../../ui/src/App.tsx). "Kind" 
 |----|------|-------------|--------------|
 | **ES1** | stream.ts:110 | `[apiUrl, threadId]` | Opens the raw protocol SSE (`POST /threads/{id}/stream/events`, channels tools/messages/lifecycle) and appends every frame to `debugEvents`. The source of `stream.debugEvents`. |
 | **MS1** | stream.ts:313 | `[debugEvents, stream]` | Normalizes the SDK stream (defaults for messages/subagents/interrupts) and attaches `debugEvents` + `clearDebugEvents`. New object identity whenever the SDK stream or `debugEvents` changes. |
-| **E1** | 1121 | mount | Global `click` / `Escape` listeners that close the thread context menu. |
-| **E2** | 1136 | `[currentRunId, stream.isLoading, stream.messages]` | Mirrors live `stream.messages` → `visibleMessages`, logs streamed tokens, and prunes optimistic messages the stream has confirmed. |
-| **E3** | 1154 | **layout**, `[displayedMessages]` | Autoscroll to bottom when stuck-to-bottom. Runs before paint. |
-| **E4** | 1161 | mount | Attaches the viewport `scroll` listener that maintains `shouldStickToBottomRef`. |
-| **E5** | 1174 | `[activeRun, currentRunId, stream.isLoading, threadId]` | Mirrors those four values into refs so async callbacks read fresh values without being deps. |
-| **E6** | 1181 | `[stream.error]` | Surfaces a stream error into the `error` banner. |
-| **E7** | 1190 | mount | Normalizes the initial `localStorage` thread into the address bar once. |
-| **E8** | 1198 | `[apiUrl]` | Startup: `listThreads` → `threads`. Abortable via a `cancelled` flag. |
-| **E9** | 1228 | `[apiUrl, threadId]` | `refreshRuns(threadId)` with an `AbortController`; repopulates `runs` when the thread changes. |
-| **E10** | 1239 | `[apiUrl, currentRunId, hydratedRunLimit, runCheckpointSnapshots, runs, runsInMessageOrder, threadId]` | **Lazy hydration**: `selectRunsToHydrate` picks the newest window of finished runs + the viewed run, fetches each snapshot independently (`Promise.allSettled`), and fills `runCheckpointSnapshots`. |
-| **E11** | 1309 | mount | `popstate` handler — back/forward reloads the thread from the URL and resets all per-thread state. |
-| **E12** | 1336 | `[activeRun, apiUrl]` | Currently a no-op placeholder (reserved). |
-| **E13** | 1344 | `[currentRunId, currentRunSnapshotLoaded, currentRunStatus, stream.isLoading, threadId]` | Clears `currentRunId` once its run reaches a terminal status **and** (for persisted statuses) its snapshot is loaded — the live→persisted handoff gate. |
-| **E14** | 1357 | `[currentRunId, stream.debugEvents, threadId]` | On a terminal `lifecycle` event for the current run: mark the run's status, drop its stale snapshot, clear live state, and `refreshRuns` to reload the persisted transcript. Guarded by `handledTerminalRunIdsRef`. |
-| **E15** | 1400 | `[activeRun, currentRunId, runs, stream.isLoading, threadId]` | **activeRunMonitor (in-memory)**: when `runs` contains an active run not yet joined, ask `/active`; auto-join if streaming, else show the banner (`setActiveRun`). |
-| **E16** | 1439 | `[apiUrl, threadId]` | **activeRunMonitor (backend)**: one-shot `/runs` check + a persistent `lifecycle` `EventSource` that drives `showActiveRun`/`clearActiveRun`. The always-on discovery channel per thread. |
+| **E1** | 1126 | mount | Global `click` / `Escape` listeners that close the thread context menu. |
+| **E2** | 1141 | `[currentRunId, stream.isLoading, stream.messages]` | Routes live `stream.messages` into the **current run's own bucket** (`runLiveMessages[currentRunId]`, via `selectLiveRunMessages`), logs streamed tokens, and prunes optimistic messages the stream has confirmed. |
+| **E2b** | 1175 | `[currentRunId, liveRunSubagentCards]` | The card equivalent of E2: retains M1's live cards into `runSubagentCards[currentRunId]` so a run's cards survive after E14 drops its snapshot. Structural-compare bailed (`sameSubagentCards`) since M1 returns a new array reference every render. |
+| **E3** | 1190 | **layout**, `[displayedMessages]` | Autoscroll to bottom when stuck-to-bottom. Runs before paint. |
+| **E4** | 1197 | mount | Attaches the viewport `scroll` listener that maintains `shouldStickToBottomRef`. |
+| **E5** | 1210 | `[activeRun, currentRunId, stream.isLoading, threadId]` | Mirrors those four values into refs so async callbacks read fresh values without being deps. |
+| **E6** | 1217 | `[stream.error]` | Surfaces a stream error into the `error` banner. |
+| **E7** | 1226 | mount | Normalizes the initial `localStorage` thread into the address bar once. |
+| **E8** | 1234 | `[apiUrl]` | Startup: `listThreads` → `threads`. Abortable via a `cancelled` flag. |
+| **E9** | 1264 | `[apiUrl, threadId]` | `refreshRuns(threadId)` with an `AbortController`; repopulates `runs` when the thread changes. |
+| **E10** | 1275 | `[apiUrl, currentRunId, hydratedRunLimit, runCheckpointSnapshots, runs, runsInMessageOrder, threadId]` | **Lazy hydration**: `selectRunsToHydrate` picks the newest window of finished runs + the viewed run, fetches each snapshot independently (`Promise.allSettled`), and fills `runCheckpointSnapshots`. Skips caching a snapshot with zero messages (the terminal-status race — see M7). |
+| **E11** | 1355 | mount | `popstate` handler — back/forward reloads the thread from the URL and resets all per-thread state (including `runLiveMessages`/`runSubagentCards`). |
+| **E12** | 1385 | `[activeRun, apiUrl]` | Currently a no-op placeholder (reserved). |
+| **E13** | 1393 | `[currentRunId, currentRunSnapshotLoaded, currentRunStatus, stream.isLoading, threadId]` | Releases `currentRunId` once its run reaches a terminal status **and** (for persisted statuses) its snapshot is loaded — switches `subagentCardsForMessage`/`actionsForMessage` from the live branch to the retained-bucket branch. Does not itself touch `runLiveMessages`/`runSubagentCards`. |
+| **E14** | 1406 | `[currentRunId, stream.debugEvents, threadId]` | On a terminal `lifecycle` event for the current run: mark the run's status, drop its stale snapshot, `refreshRuns` to reload the persisted transcript. **Does not** clear `runLiveMessages`/`runSubagentCards` — the run keeps rendering from them until its snapshot lands. Guarded by `handledTerminalRunIdsRef`. |
+| **E15** | 1453 | `[activeRun, currentRunId, runs, stream.isLoading, threadId]` | **activeRunMonitor (in-memory)**: when `runs` contains an active run not yet joined, ask `/active`; auto-join if streaming, else show the banner (`setActiveRun`). |
+| **E16** | 1492 | `[apiUrl, threadId]` | **activeRunMonitor (backend)**: one-shot `/runs` check + a persistent `lifecycle` `EventSource` that drives `showActiveRun`/`clearActiveRun`. The always-on discovery channel per thread. |
 
 ## 3. Memo & derived-value catalog
 
 | Id | Line | Deps | Produces |
 |----|------|------|----------|
-| **M1** | 654 | `[currentRunId, stream]` | `liveRunSubagentCards` — subagent cards for the live run, merged from `debugEvents` + SDK `subagents`. |
-| **M2** | 658 | `[currentRunId, stream.debugEvents]` | `liveRunActions` — action rows ("Searching…", "Delegating…") from live tool events. |
-| **M3** | 662 | `[visibleActiveRun, currentRunId, stream]` | `inputRequests` — interrupt/permission prompts, only when a run is current but no banner is shown. |
-| **M4** | 666 | `[runs, threadId]` | `runsInMessageOrder` — this thread's runs sorted oldest→newest. |
-| **M5** | 678 | `[runCheckpointSnapshots, runsInMessageOrder]` | `persistedMessageEntries` — deduped messages from checkpoint snapshots, attributed to the earliest run. |
-| **M6** | 682 | `[persistedMessageEntries]` | `persistedMessages` — just the messages of M5. |
-| **M7** | 686 | `[currentRunId, optimisticMessages, runCheckpointSnapshots, runLiveMessages, runsInMessageOrder]` | `displayedMessageEntries` — the rendered transcript, assembled **per run** by `buildRunMessageEntries` from exactly one source per run (persisted snapshot if present, else that run's live bucket), plus trailing optimistic messages. Ids are deduped globally (earliest run wins), so `${runId}:${messageId}` is unique by construction. |
-| **M8** | 722 | `[displayedMessageEntries]` | `displayedMessages` — messages of M7; the dep of the autoscroll layout effect E3. |
+| **M1** | 671 | `[currentRunId, stream]` | `liveRunSubagentCards` — subagent cards for the live run, merged from `debugEvents` + SDK `subagents`. Retained per-run into `runSubagentCards` by **E2b**; read directly here only while the run is the actively-streaming `currentRunId` (see `retainedSubagentCards` for the persisted/finished case). |
+| **M2** | 675 | `[currentRunId, stream.debugEvents]` | `liveRunActions` — action rows ("Searching…", "Delegating…") from live tool events. |
+| **M3** | 679 | `[visibleActiveRun, currentRunId, stream]` | `inputRequests` — interrupt/permission prompts, only when a run is current but no banner is shown. |
+| **M4** | 683 | `[runs, threadId]` | `runsInMessageOrder` — this thread's runs sorted oldest→newest. |
+| **M7** | 704 | `[currentRunId, optimisticMessages, runCheckpointSnapshots, runLiveMessages, runsInMessageOrder]` | `displayedMessageEntries` — the rendered transcript, assembled **per run** by `buildRunMessageEntries` from exactly one source per run via `persistedOrLive` (persisted snapshot once it has content, else that run's live bucket — an *empty* snapshot counts as absent), plus trailing optimistic messages. Ids are deduped globally (earliest run wins), so `${runId}:${messageId}` is unique by construction. Superseded a `persistedMessageEntries`/`persistedMessages` (formerly M5/M6) two-step; that intermediate pair no longer exists. |
+| **M8** | 724 | `[displayedMessageEntries]` | `displayedMessages` — messages of M7; the dep of the autoscroll layout effect E3. |
 
-Derived every render (not memoized): `visibleActiveRun` (652), `currentRun` (673), `currentRunStatus` (676), `currentRunSnapshotLoaded` (677).
+Derived every render (not memoized): `visibleActiveRun` (669), `currentRun` (690), `currentRunStatus` (693), `currentRunSnapshotLoaded` (694).
 
 ## 4. Key functions (created each render, invoked by events/effects)
 
-`submit`, `resume`, `continueActiveRun`, `stopActiveRun`, `refreshThreads`, `refreshRuns`, `resetVisibleThread`, `newThread`, `openThread`, `renameThreadTitle`, `removeThread`, `logStreamingTokens`, `subagentCardsForMessage`, `actionsForMessage`, and the reassigned `joinRunStreamRef.current`. None run during render — they are called by DOM events or effects.
+`submit`, `resume`, `continueActiveRun`, `stopActiveRun`, `refreshThreads`, `refreshRuns`, `resetVisibleThread`, `newThread`, `openThread`, `renameThreadTitle`, `removeThread`, `logStreamingTokens`, `subagentCardsForMessage`, `actionsForMessage`, `retainedSubagentCards` (shared `persistedOrLive` lookup used by both, for a run that is not the actively-streaming one), and the reassigned `joinRunStreamRef.current`. None run during render — they are called by DOM events or effects (`subagentCardsForMessage`/`actionsForMessage`/`retainedSubagentCards` are called from JSX during render, but are pure reads with no side effects).
 
 ## 5. The three inbound event channels
 
