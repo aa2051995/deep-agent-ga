@@ -120,6 +120,18 @@ describe("buildRunMessageEntries", () => {
     ]);
   });
 
+  it("treats an EMPTY snapshot as absent and keeps rendering the live bucket", () => {
+    // A run can flip to a terminal status before its snapshot row is written, so
+    // the backend briefly serves `messages: []`. Honouring that made the run
+    // vanish the instant it turned persisted.
+    const entries = build(
+      ["runA"],
+      { runA: [] },
+      { runA: [h("hA", "question A"), ai("finalA", "answer A")] },
+    );
+    expect(entries.map((e) => e.message)).toEqual([h("hA", "question A"), ai("finalA", "answer A")]);
+  });
+
   it("prefers the persisted snapshot over the live bucket once it arrives", () => {
     const entries = build(
       ["runA"],

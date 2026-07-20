@@ -105,6 +105,12 @@ export type RunMessageEntry<T> = { message: T; runId: string | null };
  *   (re)fetched, instead of disappearing until some later event happens to
  *   trigger hydration.
  *
+ * An **empty** snapshot counts as absent, not as "this run has no messages".
+ * The backend can briefly serve one (a run flips to `success` before its
+ * snapshot row is written), and treating `[]` as authoritative made the run
+ * vanish the instant it turned persisted. Falling back to the live bucket keeps
+ * it on screen; a real run always has at least the user's message.
+ *
  * Generic over the message type so it stays free of the SDK types.
  */
 export function buildRunMessageEntries<T>(
@@ -116,7 +122,8 @@ export function buildRunMessageEntries<T>(
   const entries: RunMessageEntry<T>[] = [];
   const seenIds = new Set<string>();
   for (const runId of runIds) {
-    const messages = snapshotMessagesFor(runId) ?? liveMessagesFor(runId) ?? [];
+    const snapshot = snapshotMessagesFor(runId);
+    const messages = snapshot && snapshot.length > 0 ? snapshot : liveMessagesFor(runId) ?? [];
     for (const message of messages) {
       const id = idOf(message);
       if (id) {

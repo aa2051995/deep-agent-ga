@@ -1276,6 +1276,16 @@ export function App() {
           if (isStale() || snapshot.run.threadId !== requestThreadId) {
             return;
           }
+          if (snapshot.messages.length === 0) {
+            // The run can flip to a terminal status before its snapshot row is
+            // written. Caching the empty result would pin the run to an empty
+            // transcript forever (it is never refetched). Skip it instead: the
+            // run keeps rendering from its live bucket, and because this writes
+            // no state there is no refetch loop — the next effect run (new run,
+            // refreshRuns, thread change) retries it.
+            logger.warn("runs.checkpoints.load.empty", { threadId: requestThreadId, runId: run.runId });
+            return;
+          }
           setRunCheckpointSnapshots((current) =>
             current[run.runId] ? current : { ...current, [run.runId]: snapshot },
           );
