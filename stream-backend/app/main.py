@@ -16,6 +16,7 @@ from uuid import uuid4
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
+# from celery.states import state
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -34,7 +35,7 @@ from .models import (
     now_iso,
 )
 from .event_bus import PublishingRepository, create_event_broker
-from .projections import project_run_checkpoints
+from .projections import project_run_checkpoints, project_subagents
 from .protocol import matches_subscription, sse_frame
 from .service import ProtocolService, merge_values
 from .streaming import ProtocolStreamFilter, RunStreamFilter, StreamSubscriptionManager
@@ -121,6 +122,8 @@ app.add_middleware(
 )
 def set_env():
     os.environ.setdefault("STREAM_BACKEND_STORE", "postgres")  # --- IGNORE ---
+    os.environ.setdefault("STREAM_BACKEND_TEST_AGENT", "false")  # --- IGNORE ---
+    # os.environ.setdefault("STREAM_BACKEND_AGENT_MODE", "fixture")  # --- IGNORE ---
     os.environ.setdefault("STREAM_BACKEND_POSTGRES_URI", "postgresql://postgres:am12345Eee@localhost:5432/myapp")  # --- IGNORE ---
     os.environ.setdefault("RESEARCH_AGENT_PROVIDER", "bedrock")
     os.environ.setdefault("RESEARCH_AGENT_MODEL", "moonshotai.kimi-k2.5")
@@ -133,7 +136,17 @@ def set_env():
     os.environ.setdefault("STREAM_BACKEND_EVENT_BROKER", "rabbitmq")
     os.environ.setdefault("RABBITMQ_STREAM_URL", "rabbitmq-stream://guest:guest@127.0.0.1:5552/")
     os.environ.setdefault("STREAM_BACKEND_CELERY_QUEUE", "deep-research-runs")
-    os.environ.setdefault("STREAM_BACKEND_CELERY_TERMINATE_ON_CANCEL", "true")
+    # Celery's terminate=True requires a worker pool that can kill a running
+    # slot (prefork, via SIGTERM/SIGKILL to a child process). This project's
+    # worker guide recommends --pool=threads/--pool=solo on Windows (no
+    # fork()), and Python threads cannot be killed from outside — Celery's
+    # thread pool does not implement kill_job, so terminate=True there raises
+    # NotImplementedError inside the worker's pidbox handler ("pidbox command
+    # error") without actually stopping the task. Actual in-progress
+    # cancellation now goes through research_runtime's cooperative
+    # cancel_requested poll instead (see RunCancelled). Default this to false;
+    # only set it true if the worker actually runs --pool=prefork.
+    os.environ.setdefault("STREAM_BACKEND_CELERY_TERMINATE_ON_CANCEL", "false")
 set_env()
 def create_repository():
    
@@ -931,17 +944,27 @@ async def get_run_checkpoints(thread_id: str, run_id: str, limit: int = 200) -> 
 
     # Fallback: run is still in progress (or predates snapshots) — project it
     # live from the checkpoint history.
-    history = await repo.get_history(thread_id, limit=limit)
-    projection = project_run_checkpoints(run, history)
-    logger.info(
-        "runs.checkpoints.get.complete thread_id=%s run_id=%s checkpoints=%s messages=%s subagents=%s",
-        thread_id,
-        run_id,
-        len(projection["checkpoints"]),
-        len(projection["messages"]),
-        len(projection["subagents"]),
-    )
-    return projection
+    # history = await repo.get_history(thread_id, limit=limit)
+    # projection = project_run_checkpoints(run, history)
+    # logger.info(
+    #     "runs.checkpoints.get.complete thread_id=%s run_id=%s checkpoints=%s messages=%s subagents=%s",
+    #     thread_id,
+    #     run_id,
+    #     len(projection["checkpoints"]),
+    #     len(projection["messages"]),
+    #     len(projection["subagents"]),
+    # )
+    # return projection
+    return {
+        "run": run.model_dump(),
+        "values": [],
+        "messages": [],
+        "todos": [],
+        "subagents":   [] ,
+        "checkpoints": []     
+     
+    
+    }   
 
 
 @app.post("/threads/{thread_id}/runs/{run_id}/resume")
