@@ -31,16 +31,20 @@ Covered in [Flow 6](06-browse-history.md#opening-a-different-thread): `resetVisi
 ## Rename — `renameThreadTitle(id)`
 
 `renameThreadTitle` (line 1061):
-1. `setOpenThreadMenu(null)`; `window.prompt` for the new title (cancel → return; empty → `setError`).
+1. `setOpenThreadMenu(null)`; `await yieldToBrowser()`; `window.prompt` for the new title (cancel → return; empty → `setError`).
 2. `setError(null)`; `await renameThread(apiUrl, id, title)`.
 3. `setThreads(map → replace title/updatedAt for id)` — optimistic-ish list update from the server response.
 
 Only `threads` changes → the sidebar row re-renders. No run/transcript effects fire (no `threadId`/`runs`/`currentRunId` change).
 
+### Why `yieldToBrowser()` before the dialog
+
+`window.prompt`/`window.confirm` are synchronous, blocking native dialogs. Calling one in the same tick as `setOpenThreadMenu(null)` froze the screen with the `⋯` menu still painted: entering a modal dialog doesn't go through the browser's normal render step, so the pending "menu closed" paint never happened until the dialog itself closed. `yieldToBrowser()` (`App.tsx`, a `setTimeout(resolve, 0)` wrapped in a promise) resolves on the next macrotask, giving the browser one tick to flush that paint before the dialog takes over — the menu is now visibly gone the instant rename/delete is clicked, not just after the dialog closes.
+
 ## Delete — `removeThread(id)`
 
 `removeThread` (line 1095):
-1. `setOpenThreadMenu(null)`; `window.confirm`.
+1. `setOpenThreadMenu(null)`; `await yieldToBrowser()`; `window.confirm`.
 2. `setError(null)`; `await deleteThread(apiUrl, id)`.
 3. `setThreads(filter out id)`.
 4. If `id === threadId` (deleting the open thread): `resetVisibleThread(null)` + `writeThreadUrl(null, true)`.
@@ -49,7 +53,11 @@ Deleting the **open** thread cascades exactly like `newThread` (empties the work
 
 ## Back/forward — E11 `popstate`
 
-The handler reads `threadIdFromUrl()` and performs the same reset as `resetVisibleThread` (bumps `threadRequestSeqRef`, clears per-thread state, `switchThreadRef.current?.(next)`, `setThreadId(next)`, syncs `localStorage`). Because `threadId` changes, ES1/E9/E10/E16 re-run for the restored thread. `switchThreadRef` (reassigned each render) avoids a stale `stream` closure inside this mount-only effect.
+The handler reads `threadIdFromUrl()` and performs the same reset as `resetVisibleThread` (bumps `threadRequestSeqRef`, `setError(null)`, clears per-thread state, `switchThreadRef.current?.(next)`, `setThreadId(next)`, syncs `localStorage`). Because `threadId` changes, ES1/E9/E10/E16 re-run for the restored thread. `switchThreadRef` (reassigned each render) avoids a stale `stream` closure inside this mount-only effect.
+
+## Stale error banner across thread transitions
+
+`resetVisibleThread` and the E11 `popstate` handler both call `setError(null)` as part of the reset. A leftover error from a previous action (a failed run, a failed rename attempted just before switching away, …) belongs to the thread/action that produced it — without this, it kept rendering across `newThread`/`openThread`/delete-open/back-forward even though it had nothing to do with the thread now on screen.
 
 ## Phase diagram
 

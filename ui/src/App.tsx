@@ -189,6 +189,21 @@ function messageKey(message: Message, index: number): string {
   return message.id ?? `${message.type}-${index}`;
 }
 
+/**
+ * Resolve on the next macrotask, giving the browser a chance to paint any
+ * state updates queued earlier in the same synchronous call stack.
+ *
+ * Needed before a synchronous, blocking native dialog (`window.prompt` /
+ * `window.confirm` / `window.alert`): calling one immediately after a state
+ * update (e.g. closing a menu) freezes the screen with the pre-update DOM
+ * still showing, because entering the modal dialog does not go through the
+ * browser's normal render step — the pending paint never happens until the
+ * dialog closes and control returns to the event loop.
+ */
+function yieldToBrowser(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 /** Reference-equality list compare, so re-capturing an unchanged run is a no-op. */
 function sameMessageList(left: Message[] | undefined, right: Message[]): boolean {
   if (!left || left.length !== right.length) {
@@ -869,6 +884,10 @@ export function App() {
   function resetVisibleThread(nextThreadId: string | null): void {
     threadIdRef.current = nextThreadId;
     threadRequestSeqRef.current += 1;
+    // A leftover error from a previous action (failed run, failed rename, …)
+    // must not persist across a new/switched/deleted thread — it has nothing
+    // to do with the thread the user is now looking at.
+    setError(null);
     setActiveRun(null);
     setRunLiveMessages({});
     setRunSubagentCards({});
@@ -1127,6 +1146,12 @@ export function App() {
     const thread = threads.find((item) => item.threadId === nextThreadId);
     const currentTitle = thread?.title ?? "";
     setOpenThreadMenu(null);
+    // window.prompt is a synchronous, blocking native dialog: calling it in the
+    // same tick as the state update above froze the screen with the menu still
+    // painted, because the browser has no chance to flush the pending "menu
+    // closed" render before the dialog takes over. Yielding one tick first lets
+    // that paint happen, so the menu is visibly gone before the dialog opens.
+    await yieldToBrowser();
     const nextTitle = window.prompt("Rename thread", currentTitle);
     if (nextTitle === null) {
       return;
@@ -1161,6 +1186,9 @@ export function App() {
     const thread = threads.find((item) => item.threadId === nextThreadId);
     const label = thread?.title ?? nextThreadId.slice(0, 8);
     setOpenThreadMenu(null);
+    // See renameThreadTitle: yield one tick so the "menu closed" state actually
+    // paints before window.confirm's blocking dialog freezes the screen.
+    await yieldToBrowser();
     if (!window.confirm(`Delete "${label}"?`)) {
       return;
     }
@@ -1417,6 +1445,7 @@ export function App() {
       logger.info("thread.url.popstate", { threadId: nextThreadId });
       threadIdRef.current = nextThreadId;
       threadRequestSeqRef.current += 1;
+      setError(null);
       setActiveRun(null);
       setRunLiveMessages({});
       setRunSubagentCards({});
