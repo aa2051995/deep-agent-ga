@@ -326,7 +326,7 @@ def default_model_for(provider: str) -> str:
     if provider == "openai":
         return "gpt-4o"
     if provider == "bedrock":
-        return f"{bedrock_region_prefix()}anthropic.claude-3-5-sonnet-20240620-v1:0"
+        return f"{bedrock_region_prefix()}anthropic.claude-sonnet-4-5-20250929-v1:0"
     return "gemini-2.5-pro"
 
 

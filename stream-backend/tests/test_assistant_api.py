@@ -125,6 +125,19 @@ def test_test_model_reports_failure(client, monkeypatch):
     assert "openai" in body["message"]
 
 
+def test_bedrock_models_endpoint(client, monkeypatch):
+    monkeypatch.setattr(
+        assistant_api,
+        "list_bedrock_models",
+        lambda: {"ok": True, "models": [{"name": "eu.anthropic.claude-sonnet-4-5-20250929-v1:0", "label": "Sonnet 4.5"}], "message": "1 model"},
+    )
+    response = client.get("/assistants/catalog/bedrock-models")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["models"][0]["name"].startswith("eu.anthropic")
+
+
 def test_assist_skill_template_fallback(client):
     response = client.post(
         "/assistants/assist/skill",

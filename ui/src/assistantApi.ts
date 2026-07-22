@@ -240,6 +240,16 @@ export interface TestModelResult {
   sample?: string;
 }
 
+export interface BedrockModelsResult {
+  ok: boolean;
+  models: CatalogModel[];
+  message: string;
+}
+
+export async function fetchBedrockModels(apiUrl = DEFAULT_API_URL): Promise<BedrockModelsResult> {
+  return json(await fetch(`${apiUrl}/assistants/catalog/bedrock-models`), "Load Bedrock models");
+}
+
 export async function testModel(model: ModelConfig, apiUrl = DEFAULT_API_URL): Promise<TestModelResult> {
   return json(
     await fetch(`${apiUrl}/assistants/assist/test-model`, {

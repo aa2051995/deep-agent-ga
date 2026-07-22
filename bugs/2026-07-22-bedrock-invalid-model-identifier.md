@@ -51,6 +51,17 @@ when calling the ConverseStream operation: The provided model identifier is inva
 - Repaired the on-disk `deep-agent` / `general-purpose` configs to a consistent
   `eu.anthropic.claude-3-5-sonnet-20240620-v1:0`.
 
+## Follow-up: model ids are account-specific
+
+Even valid-looking ids (`eu.anthropic.claude-3-5-sonnet-*`) were rejected because
+the target account (eu-north-1) only has **Claude 4.x** enabled, not 3.5. Guessing
+ids is unreliable. Added `app/bedrock_catalog.py` + `GET
+/assistants/catalog/bedrock-models`, which queries the account
+(`list_inference_profiles` + `list_foundation_models`) and returns the real,
+invocable ids. The Model tab's "Load available models from AWS" button uses it.
+Verified `eu.anthropic.claude-sonnet-4-5-20250929-v1:0` responds; both seeded
+assistants now point at it, and the static defaults use current-gen ids.
+
 ## Best practices
 
 - Keep provider and model **coupled**: never source them from independent env

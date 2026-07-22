@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from .assistant_assist import generate_skill, generate_system_prompt, probe_model
 from .assistant_catalog import catalog
+from .bedrock_catalog import list_bedrock_models
 from .assistants import (
     AssistantConfig,
     AssistantExists,
@@ -106,6 +107,12 @@ class MemoryWriteRequest(BaseModel):
 @router.get("/catalog")
 async def get_catalog() -> dict[str, Any]:
     return catalog()
+
+
+@router.get("/catalog/bedrock-models")
+def get_bedrock_models() -> dict[str, Any]:
+    # Sync handler: FastAPI runs the blocking boto3 calls in a threadpool.
+    return list_bedrock_models()
 
 
 @router.post("/assist/system-prompt")

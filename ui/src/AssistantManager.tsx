@@ -25,6 +25,7 @@ import {
   draftSkill,
   draftSystemPrompt,
   emptyAssistant,
+  fetchBedrockModels,
   fetchCatalog,
   listAssistants,
   testModel,
@@ -220,7 +221,9 @@ export function AssistantManager() {
           {tab === "General" && (
             <GeneralTab draft={draft} patch={patch} apiUrl={apiUrl} onError={fail} />
           )}
-          {tab === "Model" && catalog && <ModelTab draft={draft} patch={patch} catalog={catalog} />}
+          {tab === "Model" && catalog && (
+            <ModelTab draft={draft} patch={patch} catalog={catalog} apiUrl={apiUrl} />
+          )}
           {tab === "Tools" && catalog && <ToolsTab draft={draft} patch={patch} catalog={catalog} />}
           {tab === "MCP" && <MCPTab draft={draft} patch={patch} />}
           {tab === "Skills" && (
@@ -338,15 +341,38 @@ function ModelTab({
   draft,
   patch,
   catalog,
+  apiUrl,
 }: {
   draft: AssistantUpsert;
   patch: (u: Partial<AssistantUpsert>) => void;
   catalog: Catalog;
+  apiUrl: string;
 }) {
   const model = draft.model;
   const provider = catalog.providers.find((p) => p.name === model.provider);
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<TestModelResult | null>(null);
+  const [bedrockModels, setBedrockModels] = useState<CatalogModel[]>([]);
+  const [loadingBedrock, setLoadingBedrock] = useState(false);
+  const [bedrockMessage, setBedrockMessage] = useState<string>("");
+
+  const loadBedrock = async () => {
+    setLoadingBedrock(true);
+    setBedrockMessage("");
+    try {
+      const res = await fetchBedrockModels(apiUrl);
+      setBedrockModels(res.models);
+      setBedrockMessage(res.message);
+    } catch (err) {
+      setBedrockMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoadingBedrock(false);
+    }
+  };
+
+  // Prefer account-discovered models when available; otherwise the static list.
+  const modelOptions =
+    model.provider === "bedrock" && bedrockModels.length > 0 ? bedrockModels : provider?.models ?? [];
 
   // Keep provider and model consistent: switching provider selects that
   // provider's first (default) model so the pair is always valid.
@@ -388,13 +414,23 @@ function ModelTab({
       </label>
       <ModelNameField
         value={model.name}
-        models={provider?.models ?? []}
+        models={modelOptions}
         example={provider?.example}
         onChange={(name) => {
           setResult(null);
           patch({ model: { ...model, name } });
         }}
       />
+      {model.provider === "bedrock" && (
+        <div className="am-field">
+          <div className="am-assist-row">
+            <button className="am-ghost" type="button" onClick={() => void loadBedrock()} disabled={loadingBedrock}>
+              {loadingBedrock ? "Loading…" : "Load available models from AWS"}
+            </button>
+            {bedrockMessage && <span className="am-muted">{bedrockMessage}</span>}
+          </div>
+        </div>
+      )}
       <label className="am-field">
         <span>{keyLabel}</span>
         <input

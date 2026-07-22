@@ -82,11 +82,14 @@ falling back to the provider env var; Bedrock uses AWS credentials) and a
 **Test model** button that calls `POST /assistants/assist/test-model` to confirm
 the provider/model/key actually work before saving.
 
-> **Bedrock:** model ids are region-aware. Anthropic/Meta/Mistral models are
-> invoked via a cross-region inference profile (`eu.`/`us.`/`apac.` prefix chosen
-> from `AWS_REGION`); the bare `anthropic.*` id is rejected as invalid in regions
-> that require a profile. The catalog offers the prefixed ids plus on-demand
-> Amazon Nova models.
+> **Bedrock:** available models are account/region specific. The Model tab has a
+> **Load available models from AWS** button (`GET /assistants/catalog/bedrock-models`)
+> that queries the account via boto3 (`list_inference_profiles` +
+> `list_foundation_models`) and populates the dropdown with real, invocable ids —
+> the reliable way to pick a model. Ids are region-aware: Anthropic/Meta/Mistral
+> models are invoked through a cross-region inference profile
+> (`eu.`/`us.`/`apac.` prefix from `AWS_REGION`); the bare `anthropic.*` id is
+> rejected in regions that require a profile. The static list is only a fallback.
 
 ## AI-assisted authoring
 

@@ -70,16 +70,15 @@ def _bedrock_models() -> list[dict[str, Any]]:
     profile. Prefix the profile (``eu.``/``us.``/``apac.``) matching the
     configured AWS region. Amazon Nova/Titan are available on-demand (no prefix).
     """
+    # Static fallback only — model availability is account/region specific, so
+    # prefer the live "Load available models from AWS" list
+    # (GET /assistants/catalog/bedrock-models) which queries the account.
     p = bedrock_region_prefix()
     return [
-        {"name": f"{p}anthropic.claude-3-5-sonnet-20240620-v1:0", "label": "Claude 3.5 Sonnet v1 (Bedrock)"},
-        {"name": f"{p}anthropic.claude-3-5-sonnet-20241022-v2:0", "label": "Claude 3.5 Sonnet v2 (Bedrock)"},
-        {"name": f"{p}anthropic.claude-3-5-haiku-20241022-v1:0", "label": "Claude 3.5 Haiku (Bedrock)"},
-        {"name": f"{p}anthropic.claude-3-haiku-20240307-v1:0", "label": "Claude 3 Haiku (Bedrock)"},
-        {"name": f"{p}meta.llama3-1-70b-instruct-v1:0", "label": "Llama 3.1 70B (Bedrock)"},
-        {"name": "amazon.nova-pro-v1:0", "label": "Amazon Nova Pro"},
-        {"name": "amazon.nova-lite-v1:0", "label": "Amazon Nova Lite"},
-        {"name": "mistral.mistral-large-2407-v1:0", "label": "Mistral Large (Bedrock)"},
+        {"name": f"{p}anthropic.claude-sonnet-4-5-20250929-v1:0", "label": "Claude Sonnet 4.5 (Bedrock)"},
+        {"name": f"{p}anthropic.claude-haiku-4-5-20251001-v1:0", "label": "Claude Haiku 4.5 (Bedrock)"},
+        {"name": f"{p}amazon.nova-pro-v1:0", "label": "Amazon Nova Pro"},
+        {"name": f"{p}amazon.nova-lite-v1:0", "label": "Amazon Nova Lite"},
     ]
 
 

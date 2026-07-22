@@ -64,6 +64,7 @@ def probe_model(model_config: ModelConfig) -> dict[str, Any]:
             "sample": sample,
         }
     except Exception as exc:
+        logger.warning("assist.probe_failed provider=%s model=%s", model_config.provider, model_config.name, exc_info=True)
         return {"ok": False, "message": str(exc)}
 
 
