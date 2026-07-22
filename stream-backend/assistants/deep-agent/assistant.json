@@ -1,0 +1,56 @@
+{
+  "assistant_id": "deep-agent",
+  "name": "Deep Research Agent",
+  "description": "Web research orchestrator that delegates to a researcher subagent.",
+  "created_at": "2026-07-22T12:04:58.215244+00:00",
+  "updated_at": "2026-07-22T12:04:58.215244+00:00",
+  "model": {
+    "provider": "google",
+    "name": "gemini-2.5-pro",
+    "temperature": 0.0,
+    "max_tokens": null
+  },
+  "system_prompt": "",
+  "tools": [
+    {
+      "name": "tavily_search",
+      "permission": "allow"
+    },
+    {
+      "name": "think_tool",
+      "permission": "allow"
+    }
+  ],
+  "mcp": [],
+  "skills": [],
+  "memory": [],
+  "subagents": [
+    {
+      "name": "research-agent",
+      "description": "Delegate research to the sub-agent researcher. Only give this researcher one topic at a time.",
+      "system_prompt": "",
+      "tools": [
+        "tavily_search",
+        "think_tool"
+      ],
+      "skills": [],
+      "model": null
+    }
+  ],
+  "middleware": [
+    {
+      "name": "summarization",
+      "enabled": true,
+      "config": {}
+    },
+    {
+      "name": "anthropic_prompt_caching",
+      "enabled": true,
+      "config": {}
+    }
+  ],
+  "recursion_limit": 50,
+  "metadata": {
+    "seed": true
+  }
+}

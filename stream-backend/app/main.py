@@ -34,6 +34,7 @@ from .models import (
     new_id,
     now_iso,
 )
+from .assistant_api import router as assistant_router
 from .event_bus import EventBrokerUnavailable, PublishingRepository, create_event_broker
 from .projections import project_run_checkpoints, project_subagents
 from .protocol import matches_subscription, sse_frame
@@ -120,6 +121,7 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["Content-Location"],
 )
+app.include_router(assistant_router)
 def set_env():
     os.environ.setdefault("STREAM_BACKEND_STORE", "postgres")  # --- IGNORE ---
     # os.environ.setdefault("STREAM_BACKEND_TEST_AGENT", "false")  # --- IGNORE ---

@@ -283,6 +283,16 @@ class ResearchDeepAgentRunner:
         self._checkpointer_cm: Any = None
         self._checkpointer: Any = None
         self._setup_lock = asyncio.Lock()
+        # Per-assistant compiled agents keyed by assistant_id, each remembered
+        # with the assistant.json mtime so an edited config rebuilds lazily.
+        self._assistant_agents: dict[str, tuple[Any, float | None]] = {}
+        from .assistants import AssistantStore
+
+        self._assistant_store = AssistantStore()
+        try:
+            self._assistant_store.ensure_seeded()
+        except Exception:
+            logger.warning("research.assistant_store.seed_failed", exc_info=True)
 
     def _current_prompt_mtime(self) -> float | None:
         try:
@@ -297,7 +307,48 @@ class ResearchDeepAgentRunner:
         except OSError:
             return None
 
-    async def _ensure_agent(self) -> Any:
+    def _assistant_config_mtime(self, assistant_id: str) -> float | None:
+        try:
+            path = self._assistant_store.path_for(assistant_id) / self._assistant_store.CONFIG_FILENAME
+            return path.stat().st_mtime
+        except OSError:
+            return None
+
+    async def _ensure_agent(self, assistant_id: str | None = None) -> Any:
+        """Return a compiled agent for ``assistant_id``.
+
+        When a folder-backed assistant config exists it is built via
+        :mod:`app.assistant_builder` (deepagents from config, including MCP,
+        skills, memory, subagents and permissions). Otherwise the legacy
+        hardcoded research agent is used.
+        """
+        if assistant_id and self._assistant_store.exists(assistant_id):
+            return await self._ensure_assistant_agent(assistant_id)
+        return await self._ensure_legacy_agent()
+
+    async def _ensure_assistant_agent(self, assistant_id: str) -> Any:
+        from .assistant_builder import build_agent, load_mcp_tools
+
+        async with self._setup_lock:
+            mtime = self._assistant_config_mtime(assistant_id)
+            cached = self._assistant_agents.get(assistant_id)
+            if cached is not None and cached[1] == mtime:
+                logger.info("agent.assistant.reuse id=%s", assistant_id)
+                return cached[0]
+            config = self._assistant_store.get(assistant_id)
+            logger.info("agent.assistant.build id=%s provider=%s", assistant_id, config.model.provider)
+            checkpointer = await self._ensure_checkpointer()
+            mcp_tools = await load_mcp_tools(config)
+            agent = build_agent(
+                config,
+                self._assistant_store.path_for(assistant_id),
+                checkpointer=checkpointer,
+                extra_tools=mcp_tools,
+            )
+            self._assistant_agents[assistant_id] = (agent, mtime)
+            return agent
+
+    async def _ensure_legacy_agent(self) -> Any:
         async with self._setup_lock:
             prompt_mtime = self._current_prompt_mtime()
             if self._agent is not None and prompt_mtime == self._prompt_mtime:
@@ -505,7 +556,7 @@ class ResearchDeepAgentRunner:
         )
         if await self._ensure_checkpointer() is None:
             raise ResearchRuntimeUnavailable("Cannot resume a run without a LangGraph checkpointer.")
-        agent = await self._ensure_agent()
+        agent = await self._ensure_agent(run.assistant_id)
         run.status = "running"
         await self.repo.save_run(run)
         await self.repo.append_event(
@@ -640,7 +691,7 @@ class ResearchDeepAgentRunner:
         input_payload = {"messages": [{"role": "user", "content": user["content"]}]}
         active_messages: dict[tuple[str, ...], dict[str, Any]] = {}
         final_text = ""
-        agent = await self._ensure_agent()
+        agent = await self._ensure_agent(run.assistant_id)
 
         cancel_poll_interval = _cancel_poll_interval_seconds()
         last_cancel_check = time.monotonic()
@@ -764,6 +815,7 @@ class ResearchDeepAgentRunner:
             final_checkpoint.checkpoint_id,
             final_state.metadata["step"],
         )
+        await self._persist_assistant_snapshot(run)
         await self.repo.append_event(
             run.thread_id,
             "checkpoints",
@@ -775,6 +827,41 @@ class ResearchDeepAgentRunner:
             },
         )
         await self.repo.append_event(run.thread_id, "values", {**values, "run_id": run.run_id})
+
+    async def _persist_assistant_snapshot(self, run: RunRecord) -> None:
+        """Persist the assistant definition alongside the thread checkpoint.
+
+        Flushes the assistant's config folder to disk and records a snapshot of
+        the config in the thread metadata so the exact assistant used for a run
+        is reproducible from history, even if the assistant is later edited.
+        """
+        try:
+            if not run.assistant_id or not self._assistant_store.exists(run.assistant_id):
+                return
+            config = self._assistant_store.get(run.assistant_id)
+            self._assistant_store.save(config)  # ensure folder is fully materialized
+            updater = getattr(self.repo, "update_thread_metadata", None)
+            if updater is not None:
+                await updater(
+                    run.thread_id,
+                    {
+                        "assistant_id": run.assistant_id,
+                        "assistant_snapshot": config.model_dump(mode="json"),
+                    },
+                )
+            logger.info(
+                "research.assistant_snapshot.saved thread_id=%s run_id=%s assistant_id=%s",
+                run.thread_id,
+                run.run_id,
+                run.assistant_id,
+            )
+        except Exception:
+            logger.exception(
+                "research.assistant_snapshot.failed thread_id=%s run_id=%s assistant_id=%s",
+                run.thread_id,
+                run.run_id,
+                run.assistant_id,
+            )
 
     async def _persist_run_snapshot(self, run: RunRecord) -> None:
         """Project the finished run once and store it for fast retrieval.
