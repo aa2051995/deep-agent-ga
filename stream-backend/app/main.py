@@ -122,8 +122,8 @@ app.add_middleware(
 )
 def set_env():
     os.environ.setdefault("STREAM_BACKEND_STORE", "postgres")  # --- IGNORE ---
-    os.environ.setdefault("STREAM_BACKEND_TEST_AGENT", "false")  # --- IGNORE ---
-    # os.environ.setdefault("STREAM_BACKEND_AGENT_MODE", "fixture")  # --- IGNORE ---
+    # os.environ.setdefault("STREAM_BACKEND_TEST_AGENT", "false")  # --- IGNORE ---
+    os.environ.setdefault("STREAM_BACKEND_AGENT_MODE", "fixture")  # --- IGNORE ---
     os.environ.setdefault("STREAM_BACKEND_POSTGRES_URI", "postgresql://postgres:am12345Eee@localhost:5432/myapp")  # --- IGNORE ---
     os.environ.setdefault("RESEARCH_AGENT_PROVIDER", "bedrock")
     os.environ.setdefault("RESEARCH_AGENT_MODEL", "moonshotai.kimi-k2.5")
