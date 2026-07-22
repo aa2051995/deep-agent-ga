@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
+  Bot,
   Check,
   CircleStop,
   FlaskConical,
@@ -1717,6 +1718,18 @@ export function App() {
         <button className="new-thread" onClick={newThread} type="button">
           <Plus size={16} />
           <span>New research</span>
+        </button>
+        <button
+          className="new-thread manage-assistants"
+          onClick={() => {
+            const url = new URL(window.location.href);
+            url.searchParams.set("assistants", "1");
+            window.location.href = url.toString();
+          }}
+          type="button"
+        >
+          <Bot size={16} />
+          <span>Manage assistants</span>
         </button>
         <div className="thread-list">
           {threadsLoading && <div className="thread-list-status">Loading threads...</div>}
