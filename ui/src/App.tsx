@@ -17,6 +17,13 @@ import type { SubagentStreamInterface } from "@langchain/langgraph-sdk/react";
 import { getLogMode, logger, LOG_MODES, setLogMode } from "./logger";
 import type { LogMode } from "./logger";
 import { deleteThread, getRunCheckpointSnapshot, listRuns, listThreads, renameThread } from "./api";
+import {
+  type AssistantConfig,
+  type Catalog,
+  fetchCatalog,
+  listAssistants,
+  updateAssistant,
+} from "./assistantApi";
 import { DEFAULT_API_URL, messageText, useDeepResearchStream } from "./stream";
 import type { DebugEvent, DeepResearchStream } from "./stream";
 import { selectInputRequests, subagentStreamToCard } from "./selectors";
@@ -568,8 +575,15 @@ async function fetchRunActive(
   };
 }
 
+const ACTIVE_ASSISTANT_KEY = "deep-research.activeAssistantId";
+
 export function App() {
   const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
+  const [assistants, setAssistants] = useState<AssistantConfig[]>([]);
+  const [catalog, setCatalog] = useState<Catalog | null>(null);
+  const [activeAssistantId, setActiveAssistantId] = useState<string>(
+    () => localStorage.getItem(ACTIVE_ASSISTANT_KEY) ?? "deep-agent",
+  );
   const [threadId, setThreadId] = useState<string | null>(initialThreadId);
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [threadsLoading, setThreadsLoading] = useState(false);
@@ -645,8 +659,73 @@ export function App() {
         ...current.filter((item) => item.runId !== run.run_id),
       ]);
     },
+    activeAssistantId,
   );
   switchThreadRef.current = stream.switchThread;
+
+  const activeAssistant = useMemo(
+    () => assistants.find((assistant) => assistant.assistant_id === activeAssistantId) ?? null,
+    [assistants, activeAssistantId],
+  );
+  const activeProviderModels = useMemo(() => {
+    if (!catalog || !activeAssistant) return [];
+    return catalog.providers.find((provider) => provider.name === activeAssistant.model.provider)?.models ?? [];
+  }, [catalog, activeAssistant]);
+
+  // Load the assistant roster + model catalog for the chat header selectors.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [items, cat] = await Promise.all([listAssistants(apiUrl), fetchCatalog(apiUrl)]);
+        if (cancelled) return;
+        setAssistants(items);
+        setCatalog(cat);
+        setActiveAssistantId((current) =>
+          items.some((item) => item.assistant_id === current) ? current : items[0]?.assistant_id ?? current,
+        );
+      } catch (caught) {
+        logger.warn("assistants.load.failed", {
+          message: caught instanceof Error ? caught.message : String(caught),
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [apiUrl]);
+
+  const chooseAssistant = (assistantId: string) => {
+    setActiveAssistantId(assistantId);
+    localStorage.setItem(ACTIVE_ASSISTANT_KEY, assistantId);
+    // Bind a fresh thread to the newly selected assistant so its config
+    // (model, tools, subagents) applies from the first message.
+    void switchThreadRef.current?.(null);
+    setThreadId(null);
+    threadIdRef.current = null;
+    localStorage.removeItem(CURRENT_THREAD_KEY);
+    writeThreadUrl(null, true);
+  };
+
+  const chooseModel = async (modelName: string) => {
+    if (!activeAssistant || activeAssistant.model.name === modelName) return;
+    const optimistic = { ...activeAssistant, model: { ...activeAssistant.model, name: modelName } };
+    setAssistants((current) =>
+      current.map((item) => (item.assistant_id === activeAssistant.assistant_id ? optimistic : item)),
+    );
+    try {
+      const { assistant_id, created_at, updated_at, ...rest } = optimistic;
+      void created_at;
+      void updated_at;
+      void assistant_id;
+      await updateAssistant(activeAssistant.assistant_id, rest, apiUrl);
+    } catch (caught) {
+      logger.warn("assistants.model.update.failed", {
+        message: caught instanceof Error ? caught.message : String(caught),
+      });
+      setError("Could not update the assistant's model.");
+    }
+  };
 
   // Updated on every render so effects can call joinStream without stale-closure issues.
   joinRunStreamRef.current = async (run: ActiveRun): Promise<void> => {
@@ -1800,6 +1879,41 @@ export function App() {
             <div>
               <strong>{statusText(stream.isLoading, stream.activeSubagents.length)}</strong>
               <span>{threadId ? threadId.slice(0, 8) : "No thread yet"}</span>
+            </div>
+            <div className="topbar-selectors">
+              <label className="topbar-select" title="Active assistant">
+                <Bot size={15} />
+                <select
+                  value={activeAssistantId}
+                  onChange={(event) => chooseAssistant(event.target.value)}
+                  disabled={stream.isLoading || assistants.length === 0}
+                >
+                  {assistants.length === 0 && <option value={activeAssistantId}>{activeAssistantId}</option>}
+                  {assistants.map((assistant) => (
+                    <option key={assistant.assistant_id} value={assistant.assistant_id}>
+                      {assistant.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {activeAssistant && (
+                <label className="topbar-select" title="Model for this assistant">
+                  <select
+                    value={activeAssistant.model.name}
+                    onChange={(event) => void chooseModel(event.target.value)}
+                    disabled={stream.isLoading}
+                  >
+                    {!activeProviderModels.some((model) => model.name === activeAssistant.model.name) && (
+                      <option value={activeAssistant.model.name}>{activeAssistant.model.name}</option>
+                    )}
+                    {activeProviderModels.map((model) => (
+                      <option key={model.name} value={model.name}>
+                        {model.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
             </div>
             <div className="topbar-actions">
               {stream.isLoading && (

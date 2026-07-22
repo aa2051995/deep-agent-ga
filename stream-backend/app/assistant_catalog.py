@@ -61,11 +61,52 @@ MIDDLEWARE_CATALOG: list[dict[str, Any]] = [
     },
 ]
 
+# Curated, buildable models per provider. The UI offers these in a dropdown;
+# a custom id can still be typed. Keep ``example`` as the default suggestion.
 MODEL_PROVIDERS: list[dict[str, Any]] = [
-    {"name": "google", "label": "Google Gemini", "example": "gemini-2.5-pro"},
-    {"name": "anthropic", "label": "Anthropic Claude", "example": "claude-sonnet-4-5-20250929"},
-    {"name": "bedrock", "label": "AWS Bedrock", "example": "anthropic.claude-3-5-sonnet-20240620-v1:0"},
-    {"name": "openai", "label": "OpenAI", "example": "gpt-4o"},
+    {
+        "name": "google",
+        "label": "Google Gemini",
+        "example": "gemini-2.5-pro",
+        "models": [
+            {"name": "gemini-2.5-pro", "label": "Gemini 2.5 Pro"},
+            {"name": "gemini-2.5-flash", "label": "Gemini 2.5 Flash"},
+            {"name": "gemini-2.0-flash", "label": "Gemini 2.0 Flash"},
+        ],
+    },
+    {
+        "name": "anthropic",
+        "label": "Anthropic Claude",
+        "example": "claude-sonnet-4-5-20250929",
+        "models": [
+            {"name": "claude-sonnet-4-5-20250929", "label": "Claude Sonnet 4.5"},
+            {"name": "claude-opus-4-1-20250805", "label": "Claude Opus 4.1"},
+            {"name": "claude-3-5-sonnet-20241022", "label": "Claude 3.5 Sonnet"},
+            {"name": "claude-3-5-haiku-20241022", "label": "Claude 3.5 Haiku"},
+        ],
+    },
+    {
+        "name": "bedrock",
+        "label": "AWS Bedrock",
+        "example": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "models": [
+            {"name": "anthropic.claude-3-5-sonnet-20240620-v1:0", "label": "Claude 3.5 Sonnet (Bedrock)"},
+            {"name": "anthropic.claude-3-5-haiku-20241022-v1:0", "label": "Claude 3.5 Haiku (Bedrock)"},
+            {"name": "moonshotai.kimi-k2.5", "label": "Kimi K2.5"},
+            {"name": "meta.llama3-1-70b-instruct-v1:0", "label": "Llama 3.1 70B"},
+        ],
+    },
+    {
+        "name": "openai",
+        "label": "OpenAI",
+        "example": "gpt-4o",
+        "models": [
+            {"name": "gpt-4o", "label": "GPT-4o"},
+            {"name": "gpt-4o-mini", "label": "GPT-4o mini"},
+            {"name": "gpt-4.1", "label": "GPT-4.1"},
+            {"name": "o3-mini", "label": "o3-mini"},
+        ],
+    },
 ]
 
 

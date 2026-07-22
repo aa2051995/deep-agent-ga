@@ -238,6 +238,37 @@ button {
   gap: 8px;
 }
 
+.topbar-selectors {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  margin-right: 12px;
+}
+
+.topbar-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #5b6472;
+}
+
+.topbar-select select {
+  border: 1px solid #dfe3ec;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #20242c;
+  background: #fff;
+  max-width: 220px;
+}
+
+.topbar-select select:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .icon-button {
   display: inline-grid;
   place-items: center;

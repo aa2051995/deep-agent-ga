@@ -36,7 +36,8 @@ def test_catalog(client):
     body = response.json()
     assert any(t["name"] == "tavily_search" for t in body["tools"])
     assert "allow" in body["permissions"]
-    assert any(p["name"] == "google" for p in body["providers"])
+    google = next(p for p in body["providers"] if p["name"] == "google")
+    assert any(m["name"] == "gemini-2.5-pro" for m in google["models"])
 
 
 def test_create_get_update_delete(client):

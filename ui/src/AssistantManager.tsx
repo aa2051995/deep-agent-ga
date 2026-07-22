@@ -12,6 +12,7 @@ import {
   type AssistantConfig,
   type AssistantUpsert,
   type Catalog,
+  type CatalogModel,
   type MCPServerConfig,
   type MiddlewareConfig,
   type Permission,
@@ -357,14 +358,12 @@ function ModelTab({
           ))}
         </select>
       </label>
-      <label className="am-field">
-        <span>Model name</span>
-        <input
-          value={model.name}
-          onChange={(e) => patch({ model: { ...model, name: e.target.value } })}
-          placeholder={catalog.providers.find((p) => p.name === model.provider)?.example}
-        />
-      </label>
+      <ModelNameField
+        value={model.name}
+        models={catalog.providers.find((p) => p.name === model.provider)?.models ?? []}
+        example={catalog.providers.find((p) => p.name === model.provider)?.example}
+        onChange={(name) => patch({ model: { ...model, name } })}
+      />
       <label className="am-field">
         <span>Temperature</span>
         <input
@@ -392,6 +391,54 @@ function ModelTab({
           onChange={(e) => patch({ recursion_limit: Number(e.target.value) })}
         />
       </label>
+    </div>
+  );
+}
+
+function ModelNameField({
+  value,
+  models,
+  example,
+  onChange,
+}: {
+  value: string;
+  models: CatalogModel[];
+  example?: string;
+  onChange: (name: string) => void;
+}) {
+  const known = models.some((m) => m.name === value);
+  const [custom, setCustom] = useState(!known && value !== "");
+
+  const useCustom = custom || (!known && value !== "");
+
+  return (
+    <div className="am-field">
+      <span>Model</span>
+      <select
+        value={useCustom ? "__custom__" : value}
+        onChange={(e) => {
+          if (e.target.value === "__custom__") {
+            setCustom(true);
+          } else {
+            setCustom(false);
+            onChange(e.target.value);
+          }
+        }}
+      >
+        {models.map((m) => (
+          <option key={m.name} value={m.name}>
+            {m.label} ({m.name})
+          </option>
+        ))}
+        <option value="__custom__">Custom…</option>
+      </select>
+      {useCustom && (
+        <input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={example ?? "provider model id"}
+        />
+      )}
     </div>
   );
 }

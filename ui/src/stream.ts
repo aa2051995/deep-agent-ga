@@ -103,6 +103,7 @@ export function useDeepResearchStream(
   threadId: string | null,
   onThreadId: (threadId: string) => void,
   onRunCreated?: (run: RunCallbackMeta) => void,
+  assistantId: string = ASSISTANT_ID,
 ): DeepResearchStream {
   const [debugEvents, setDebugEvents] = useState<DebugEvent[]>([]);
   // logger.debug("stream.hook.render", { apiUrl, threadId });
@@ -166,7 +167,7 @@ export function useDeepResearchStream(
 
   const streamOptions = {
     apiUrl,
-    assistantId: ASSISTANT_ID,
+    assistantId,
     threadId,
     onThreadId,
     messagesKey: "messages",

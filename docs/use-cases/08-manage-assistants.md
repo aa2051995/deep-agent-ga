@@ -62,6 +62,21 @@ sequenceDiagram
     Builder-->>Runner: compiled deepagents agent
 ```
 
+## Selecting an assistant & model in chat
+
+The chat header has two dropdowns (`App.tsx`):
+
+- **Assistant** — lists every assistant from `GET /assistants`. Choosing one sets
+  the active `assistant_id` (persisted to `localStorage`) that new runs use, and
+  starts a fresh thread so the assistant's config applies from the first message.
+- **Model** — lists the models for the active assistant's provider (from
+  `GET /assistants/catalog` → `providers[].models`). Choosing one persists the
+  change via `PUT /assistants/{id}`; the runtime rebuilds the agent on the next
+  run because the folder's `assistant.json` mtime changed.
+
+In the manage UI, the **Model** tab offers the same per-provider dropdown with a
+"Custom…" option for arbitrary model ids.
+
 ## AI-assisted authoring
 
 The **"Help me write"** buttons on the General and Skills tabs call

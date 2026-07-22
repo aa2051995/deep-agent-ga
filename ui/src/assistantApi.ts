@@ -87,10 +87,16 @@ export interface CatalogMiddleware {
   config_schema: Record<string, unknown>;
 }
 
+export interface CatalogModel {
+  name: string;
+  label: string;
+}
+
 export interface CatalogProvider {
   name: string;
   label: string;
   example: string;
+  models?: CatalogModel[];
 }
 
 export interface Catalog {
