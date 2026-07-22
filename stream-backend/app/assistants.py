@@ -24,7 +24,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .models import now_iso
 
@@ -127,7 +127,11 @@ class AssistantConfig(BaseModel):
     description: str = ""
     created_at: str = Field(default_factory=now_iso)
     updated_at: str = Field(default_factory=now_iso)
+    # ``model`` is the active model used for runs. ``models`` is the palette of
+    # confirmed/tested models the user has added; the chat UI picks the active
+    # model from it. A validator keeps ``model`` present in ``models``.
     model: ModelConfig = Field(default_factory=ModelConfig)
+    models: list[ModelConfig] = Field(default_factory=list)
     system_prompt: str = ""
     tools: list[ToolConfig] = Field(default_factory=list)
     mcp: list[MCPServerConfig] = Field(default_factory=list)
@@ -137,6 +141,21 @@ class AssistantConfig(BaseModel):
     middleware: list[MiddlewareConfig] = Field(default_factory=list)
     recursion_limit: int = 50
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _sync_active_model_into_palette(self) -> "AssistantConfig":
+        """Ensure the active ``model`` is always present in the ``models`` palette.
+
+        Migrates older single-model configs (empty ``models``) and guarantees the
+        chat model picker always lists the model that runs actually use.
+        """
+
+        def key(m: ModelConfig) -> tuple[str, str]:
+            return (m.provider, m.name)
+
+        if self.model and not any(key(m) == key(self.model) for m in self.models):
+            self.models = [*self.models, self.model]
+        return self
 
 
 class AssistantNotFound(KeyError):

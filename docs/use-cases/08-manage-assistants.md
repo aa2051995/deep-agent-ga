@@ -74,13 +74,25 @@ The chat header has two dropdowns (`App.tsx`):
   change via `PUT /assistants/{id}`; the runtime rebuilds the agent on the next
   run because the folder's `assistant.json` mtime changed.
 
-In the manage UI, the **Model** tab offers the same per-provider dropdown with a
-"Custom…" option for arbitrary model ids. Switching provider automatically
-selects that provider's default model so the pair stays consistent. The tab also
-has an optional **API key** field (stored on the assistant's `model.api_key`,
-falling back to the provider env var; Bedrock uses AWS credentials) and a
-**Test model** button that calls `POST /assistants/assist/test-model` to confirm
-the provider/model/key actually work before saving.
+In the manage UI, the **Model** tab is split: a **builder** on the left and the
+assistant's **confirmed models** on the right. The workflow is build → test →
+add:
+
+1. On the left, pick a provider and model (per-provider dropdown with a "Custom…"
+   option; switching provider auto-selects that provider's default so the pair
+   stays consistent), set temperature / max tokens / optional **API key** (stored
+   on `model.api_key`, falling back to the provider env var; Bedrock uses AWS
+   credentials).
+2. Click **Test** — `POST /assistants/assist/test-model` does a live round-trip
+   and reports ✓/✕ with the real provider error.
+3. Click **Add to confirmed models** — the model is appended to the assistant's
+   `models` palette (and becomes the active model). Remove or re-select entries
+   from the right-hand list; the active one is used for runs.
+
+The confirmed `models` palette is exactly what the **chat header's model picker**
+lists, so only vetted models are selectable there. A validator keeps the active
+`model` present in `models`, migrating older single-model assistants
+automatically.
 
 > **Bedrock:** available models are account/region specific. The Model tab has a
 > **Load available models from AWS** button (`GET /assistants/catalog/bedrock-models`)

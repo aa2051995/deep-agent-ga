@@ -110,6 +110,28 @@ def test_write_memory_registers_and_persists(store, tmp_path):
     assert (tmp_path / "m" / "memory" / "AGENTS.md").is_file()
 
 
+def test_active_model_synced_into_palette():
+    # Empty palette: the active model is migrated in.
+    config = AssistantConfig(
+        assistant_id="m",
+        name="M",
+        model=ModelConfig(provider="bedrock", name="eu.anthropic.claude-sonnet-4-5-20250929-v1:0"),
+    )
+    assert any(
+        m.provider == "bedrock" and m.name == "eu.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        for m in config.models
+    )
+    assert len(config.models) == 1
+
+
+def test_active_model_not_duplicated_in_palette():
+    m1 = ModelConfig(provider="google", name="gemini-2.5-pro")
+    m2 = ModelConfig(provider="anthropic", name="claude-sonnet-4-5-20250929")
+    config = AssistantConfig(assistant_id="m", name="M", model=m1, models=[m1, m2])
+    # m1 already present -> not appended again.
+    assert len(config.models) == 2
+
+
 def test_model_matches_provider():
     assert model_matches_provider("google", "gemini-2.5-pro")
     assert not model_matches_provider("google", "gpt-4o")

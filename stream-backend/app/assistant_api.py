@@ -54,6 +54,7 @@ class AssistantUpsert(BaseModel):
     name: str
     description: str = ""
     model: ModelConfig = Field(default_factory=ModelConfig)
+    models: list[ModelConfig] = Field(default_factory=list)
     system_prompt: str = ""
     tools: list[ToolConfig] = Field(default_factory=list)
     mcp: list[MCPServerConfig] = Field(default_factory=list)

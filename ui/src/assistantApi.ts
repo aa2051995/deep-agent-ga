@@ -63,6 +63,7 @@ export interface AssistantConfig {
   created_at: string;
   updated_at: string;
   model: ModelConfig;
+  models: ModelConfig[];
   system_prompt: string;
   tools: ToolConfig[];
   mcp: MCPServerConfig[];
@@ -261,11 +262,28 @@ export async function testModel(model: ModelConfig, apiUrl = DEFAULT_API_URL): P
   );
 }
 
+export function sameModel(a: ModelConfig, b: ModelConfig): boolean {
+  return a.provider === b.provider && a.name === b.name;
+}
+
+export function modelLabel(m: ModelConfig): string {
+  return `${m.provider}: ${m.name}`;
+}
+
+/** The assistant's confirmed models, falling back to its single active model. */
+export function confirmedModels(assistant: { model: ModelConfig; models: ModelConfig[] }): ModelConfig[] {
+  if (assistant.models.length > 0) {
+    return assistant.models;
+  }
+  return [assistant.model];
+}
+
 export function emptyAssistant(): AssistantUpsert {
   return {
     name: "",
     description: "",
     model: { provider: "google", name: "gemini-2.5-pro", temperature: 0, max_tokens: null, api_key: null },
+    models: [],
     system_prompt: "",
     tools: [],
     mcp: [],

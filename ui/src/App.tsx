@@ -19,9 +19,11 @@ import type { LogMode } from "./logger";
 import { deleteThread, getRunCheckpointSnapshot, listRuns, listThreads, renameThread } from "./api";
 import {
   type AssistantConfig,
-  type Catalog,
-  fetchCatalog,
+  type ModelConfig,
+  confirmedModels,
   listAssistants,
+  modelLabel,
+  sameModel,
   updateAssistant,
 } from "./assistantApi";
 import { DEFAULT_API_URL, messageText, useDeepResearchStream } from "./stream";
@@ -587,7 +589,6 @@ const ACTIVE_ASSISTANT_KEY = "deep-research.activeAssistantId";
 export function App() {
   const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
   const [assistants, setAssistants] = useState<AssistantConfig[]>([]);
-  const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [activeAssistantId, setActiveAssistantId] = useState<string>(
     () => localStorage.getItem(ACTIVE_ASSISTANT_KEY) ?? "deep-agent",
   );
@@ -675,20 +676,21 @@ export function App() {
     () => assistants.find((assistant) => assistant.assistant_id === activeAssistantId) ?? null,
     [assistants, activeAssistantId],
   );
-  const activeProviderModels = useMemo(() => {
-    if (!catalog || !activeAssistant) return [];
-    return catalog.providers.find((provider) => provider.name === activeAssistant.model.provider)?.models ?? [];
-  }, [catalog, activeAssistant]);
+  // The chat model picker offers the assistant's CONFIRMED models (built + added
+  // in the manage UI's Model tab), not the whole provider catalog.
+  const activeAssistantModels = useMemo(
+    () => (activeAssistant ? confirmedModels(activeAssistant) : []),
+    [activeAssistant],
+  );
 
   // Load the assistant roster + model catalog for the chat header selectors.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const [items, cat] = await Promise.all([listAssistants(apiUrl), fetchCatalog(apiUrl)]);
+        const items = await listAssistants(apiUrl);
         if (cancelled) return;
         setAssistants(items);
-        setCatalog(cat);
         setActiveAssistantId((current) =>
           items.some((item) => item.assistant_id === current) ? current : items[0]?.assistant_id ?? current,
         );
@@ -711,9 +713,9 @@ export function App() {
     localStorage.setItem(ACTIVE_ASSISTANT_KEY, assistantId);
   };
 
-  const chooseModel = async (modelName: string) => {
-    if (!activeAssistant || activeAssistant.model.name === modelName) return;
-    const optimistic = { ...activeAssistant, model: { ...activeAssistant.model, name: modelName } };
+  const chooseModel = async (next: ModelConfig) => {
+    if (!activeAssistant || sameModel(activeAssistant.model, next)) return;
+    const optimistic = { ...activeAssistant, model: next };
     setAssistants((current) =>
       current.map((item) => (item.assistant_id === activeAssistant.assistant_id ? optimistic : item)),
     );
@@ -1918,16 +1920,18 @@ export function App() {
               {activeAssistant && (
                 <label className="topbar-select" title="Model for this assistant">
                   <select
-                    value={activeAssistant.model.name}
-                    onChange={(event) => void chooseModel(event.target.value)}
+                    value={`${activeAssistant.model.provider}|${activeAssistant.model.name}`}
+                    onChange={(event) => {
+                      const picked = activeAssistantModels.find(
+                        (m) => `${m.provider}|${m.name}` === event.target.value,
+                      );
+                      if (picked) void chooseModel(picked);
+                    }}
                     disabled={stream.isLoading}
                   >
-                    {!activeProviderModels.some((model) => model.name === activeAssistant.model.name) && (
-                      <option value={activeAssistant.model.name}>{activeAssistant.model.name}</option>
-                    )}
-                    {activeProviderModels.map((model) => (
-                      <option key={model.name} value={model.name}>
-                        {model.label}
+                    {activeAssistantModels.map((model) => (
+                      <option key={`${model.provider}|${model.name}`} value={`${model.provider}|${model.name}`}>
+                        {modelLabel(model)}
                       </option>
                     ))}
                   </select>

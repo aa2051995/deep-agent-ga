@@ -28,6 +28,7 @@ import {
   fetchBedrockModels,
   fetchCatalog,
   listAssistants,
+  sameModel,
   testModel,
   updateAssistant,
   writeMemory,
@@ -348,13 +349,21 @@ function ModelTab({
   catalog: Catalog;
   apiUrl: string;
 }) {
+  // The left column edits `draft.model` (the working model + the active one used
+  // for runs). "Add to confirmed models" copies it into `draft.models`, the
+  // palette the chat UI picks from.
   const model = draft.model;
   const provider = catalog.providers.find((p) => p.name === model.provider);
+  const confirmed = draft.models.length > 0 ? draft.models : [];
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<TestModelResult | null>(null);
   const [bedrockModels, setBedrockModels] = useState<CatalogModel[]>([]);
   const [loadingBedrock, setLoadingBedrock] = useState(false);
   const [bedrockMessage, setBedrockMessage] = useState<string>("");
+  const [testedKeys, setTestedKeys] = useState<Set<string>>(new Set());
+
+  const modelKey = (m: ModelConfig) => `${m.provider}|${m.name}`;
+  const currentTested = testedKeys.has(modelKey(model));
 
   const loadBedrock = async () => {
     setLoadingBedrock(true);
@@ -370,12 +379,9 @@ function ModelTab({
     }
   };
 
-  // Prefer account-discovered models when available; otherwise the static list.
   const modelOptions =
     model.provider === "bedrock" && bedrockModels.length > 0 ? bedrockModels : provider?.models ?? [];
 
-  // Keep provider and model consistent: switching provider selects that
-  // provider's first (default) model so the pair is always valid.
   const changeProvider = (nextProvider: ModelConfig["provider"]) => {
     const next = catalog.providers.find((p) => p.name === nextProvider);
     const firstModel = next?.models?.[0]?.name ?? next?.example ?? model.name;
@@ -387,12 +393,34 @@ function ModelTab({
     setTesting(true);
     setResult(null);
     try {
-      setResult(await testModel(model));
+      const res = await testModel(model, apiUrl);
+      setResult(res);
+      if (res.ok) {
+        setTestedKeys((keys) => new Set(keys).add(modelKey(model)));
+      }
     } catch (err) {
       setResult({ ok: false, message: err instanceof Error ? err.message : String(err) });
     } finally {
       setTesting(false);
     }
+  };
+
+  const addToConfirmed = () => {
+    const exists = confirmed.some((m) => sameModel(m, model));
+    const models = exists ? confirmed.map((m) => (sameModel(m, model) ? model : m)) : [...confirmed, model];
+    // Also make the just-added model the active one used for runs.
+    patch({ models, model });
+  };
+
+  const useModel = (m: ModelConfig) => {
+    setResult(null);
+    patch({ model: { ...m } });
+  };
+
+  const removeModel = (m: ModelConfig) => {
+    const models = confirmed.filter((x) => !sameModel(x, m));
+    const activeRemoved = sameModel(model, m);
+    patch({ models, model: activeRemoved ? models[0] ?? model : model });
   };
 
   const keyLabel =
@@ -401,55 +429,80 @@ function ModelTab({
       : `API key (optional — falls back to the ${model.provider.toUpperCase()} env var)`;
 
   return (
-    <div className="am-form">
-      <label className="am-field">
-        <span>Provider</span>
-        <select value={model.provider} onChange={(e) => changeProvider(e.target.value as ModelConfig["provider"])}>
-          {catalog.providers.map((p) => (
-            <option key={p.name} value={p.name}>
-              {p.label}
-            </option>
-          ))}
-        </select>
-      </label>
-      <ModelNameField
-        value={model.name}
-        models={modelOptions}
-        example={provider?.example}
-        onChange={(name) => {
-          setResult(null);
-          patch({ model: { ...model, name } });
-        }}
-      />
-      {model.provider === "bedrock" && (
+    <div className="am-model-layout">
+      <div className="am-model-builder">
+        <h3 className="am-subhead">Build a model</h3>
+        <label className="am-field">
+          <span>Provider</span>
+          <select value={model.provider} onChange={(e) => changeProvider(e.target.value as ModelConfig["provider"])}>
+            {catalog.providers.map((p) => (
+              <option key={p.name} value={p.name}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <ModelNameField
+          value={model.name}
+          models={modelOptions}
+          example={provider?.example}
+          onChange={(name) => {
+            setResult(null);
+            patch({ model: { ...model, name } });
+          }}
+        />
+        {model.provider === "bedrock" && (
+          <div className="am-field">
+            <div className="am-assist-row">
+              <button className="am-ghost" type="button" onClick={() => void loadBedrock()} disabled={loadingBedrock}>
+                {loadingBedrock ? "Loading…" : "Load available models from AWS"}
+              </button>
+              {bedrockMessage && <span className="am-muted">{bedrockMessage}</span>}
+            </div>
+          </div>
+        )}
+        <label className="am-field">
+          <span>{keyLabel}</span>
+          <input
+            type="password"
+            autoComplete="off"
+            value={model.api_key ?? ""}
+            disabled={model.provider === "bedrock"}
+            onChange={(e) => {
+              setResult(null);
+              patch({ model: { ...model, api_key: e.target.value ? e.target.value : null } });
+            }}
+            placeholder={model.provider === "bedrock" ? "—" : "Paste a key to override the environment variable"}
+          />
+        </label>
+        <label className="am-field">
+          <span>Temperature</span>
+          <input
+            type="number"
+            step="0.1"
+            min="0"
+            max="2"
+            value={model.temperature}
+            onChange={(e) => patch({ model: { ...model, temperature: Number(e.target.value) } })}
+          />
+        </label>
+        <label className="am-field">
+          <span>Max tokens (optional)</span>
+          <input
+            type="number"
+            value={model.max_tokens ?? ""}
+            onChange={(e) => patch({ model: { ...model, max_tokens: e.target.value ? Number(e.target.value) : null } })}
+          />
+        </label>
         <div className="am-field">
           <div className="am-assist-row">
-            <button className="am-ghost" type="button" onClick={() => void loadBedrock()} disabled={loadingBedrock}>
-              {loadingBedrock ? "Loading…" : "Load available models from AWS"}
+            <button className="am-ghost" type="button" onClick={() => void runTest()} disabled={testing}>
+              <Sparkles size={14} /> {testing ? "Testing…" : "Test"}
             </button>
-            {bedrockMessage && <span className="am-muted">{bedrockMessage}</span>}
+            <button className="am-primary" type="button" onClick={addToConfirmed} disabled={!model.name.trim()}>
+              <Plus size={14} /> Add to confirmed models
+            </button>
           </div>
-        </div>
-      )}
-      <label className="am-field">
-        <span>{keyLabel}</span>
-        <input
-          type="password"
-          autoComplete="off"
-          value={model.api_key ?? ""}
-          disabled={model.provider === "bedrock"}
-          onChange={(e) => {
-            setResult(null);
-            patch({ model: { ...model, api_key: e.target.value ? e.target.value : null } });
-          }}
-          placeholder={model.provider === "bedrock" ? "—" : "Paste a key to override the environment variable"}
-        />
-      </label>
-      <div className="am-field">
-        <div className="am-assist-row">
-          <button className="am-ghost" type="button" onClick={() => void runTest()} disabled={testing}>
-            <Sparkles size={14} /> {testing ? "Testing…" : "Test model"}
-          </button>
           {result && (
             <span className={result.ok ? "am-test-ok" : "am-test-fail"}>
               {result.ok ? "✓ " : "✕ "}
@@ -457,35 +510,58 @@ function ModelTab({
               {result.sample ? ` — “${result.sample}”` : ""}
             </span>
           )}
+          {!result && currentTested && <span className="am-test-ok">✓ Tested this session</span>}
         </div>
+        <label className="am-field">
+          <span>Recursion limit</span>
+          <input
+            type="number"
+            value={draft.recursion_limit}
+            onChange={(e) => patch({ recursion_limit: Number(e.target.value) })}
+          />
+        </label>
       </div>
-      <label className="am-field">
-        <span>Temperature</span>
-        <input
-          type="number"
-          step="0.1"
-          min="0"
-          max="2"
-          value={model.temperature}
-          onChange={(e) => patch({ model: { ...model, temperature: Number(e.target.value) } })}
-        />
-      </label>
-      <label className="am-field">
-        <span>Max tokens (optional)</span>
-        <input
-          type="number"
-          value={model.max_tokens ?? ""}
-          onChange={(e) => patch({ model: { ...model, max_tokens: e.target.value ? Number(e.target.value) : null } })}
-        />
-      </label>
-      <label className="am-field">
-        <span>Recursion limit</span>
-        <input
-          type="number"
-          value={draft.recursion_limit}
-          onChange={(e) => patch({ recursion_limit: Number(e.target.value) })}
-        />
-      </label>
+
+      <div className="am-model-list">
+        <h3 className="am-subhead">Confirmed models</h3>
+        <p className="am-hint">These appear in the chat model picker. The active one is used for runs.</p>
+        {confirmed.length === 0 && (
+          <div className="am-empty">No confirmed models yet. Build one on the left, test it, then Add.</div>
+        )}
+        <ul className="am-model-items">
+          {confirmed.map((m) => {
+            const active = sameModel(model, m);
+            return (
+              <li key={modelKey(m)} className={active ? "am-model-item active" : "am-model-item"}>
+                <div className="am-model-item-main">
+                  <strong>{m.name}</strong>
+                  <span className="am-muted">
+                    {m.provider}
+                    {testedKeys.has(modelKey(m)) ? " · ✓ tested" : ""}
+                    {active ? " · active" : ""}
+                  </span>
+                </div>
+                <div className="am-model-item-actions">
+                  {!active && (
+                    <button className="am-ghost am-mini" type="button" onClick={() => useModel(m)}>
+                      Use / edit
+                    </button>
+                  )}
+                  <button
+                    className="am-icon-danger"
+                    type="button"
+                    title="Remove"
+                    disabled={confirmed.length === 1}
+                    onClick={() => removeModel(m)}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
     </div>
   );
 }
