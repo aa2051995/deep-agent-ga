@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildRunMessageEntries,
   collectOtherRunMessageIds,
+  isMainAgentTranscriptMessage,
   isStableId,
   messageIdSet,
   persistedOrLive,
@@ -251,5 +252,23 @@ describe("buildRunMessageEntries", () => {
     expect(build(["runA", "runB"], { runB: [h("hB", "B")] }, {})).toEqual([
       { message: h("hB", "B"), runId: "runB" },
     ]);
+  });
+});
+
+describe("isMainAgentTranscriptMessage", () => {
+  it("keeps human and AI text messages", () => {
+    expect(isMainAgentTranscriptMessage("human", "hello", false)).toBe(true);
+    expect(isMainAgentTranscriptMessage("ai", "here is my answer", false)).toBe(true);
+    expect(isMainAgentTranscriptMessage("ai", "reasoning", true)).toBe(true);
+  });
+
+  it("drops tool messages (todo updates, filesystem output, cancelled tasks)", () => {
+    expect(isMainAgentTranscriptMessage("tool", "Updated todo list to [...]", false)).toBe(false);
+    expect(isMainAgentTranscriptMessage("tool", "['C:/...']", false)).toBe(false);
+  });
+
+  it("drops tool-call-only AI messages with no visible text", () => {
+    expect(isMainAgentTranscriptMessage("ai", "", true)).toBe(false);
+    expect(isMainAgentTranscriptMessage("ai", "   ", true)).toBe(false);
   });
 });

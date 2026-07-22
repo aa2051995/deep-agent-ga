@@ -32,6 +32,7 @@ import { cancelCurrentRunRequest } from "./runControl";
 import {
   buildRunMessageEntries,
   collectOtherRunMessageIds,
+  isMainAgentTranscriptMessage as isMainAgentTranscript,
   persistedOrLive,
   sameMessageIdentity,
   selectLiveRunMessages,
@@ -174,6 +175,12 @@ function collectStrings(value: unknown): string[] {
 
 function isInternalTodoUpdate(message: Message, text: string): boolean {
   return message.type === "ai" && /^updated todo list(?:\s+to)?\s+/i.test(text.trim());
+}
+
+function isMainAgentTranscriptMessage(message: Message): boolean {
+  const toolCalls = (message as { tool_calls?: unknown[] }).tool_calls;
+  const hasToolCalls = Array.isArray(toolCalls) && toolCalls.length > 0;
+  return isMainAgentTranscript(message.type, messageText(message), hasToolCalls);
 }
 
 function domainFromText(value: string): string | null {
@@ -697,15 +704,11 @@ export function App() {
   }, [apiUrl]);
 
   const chooseAssistant = (assistantId: string) => {
+    // Only change which assistant future runs use. Do NOT reset the current
+    // thread — that would clear the visible runs/transcript. Start a new thread
+    // explicitly (the "New research" button) to begin a clean conversation.
     setActiveAssistantId(assistantId);
     localStorage.setItem(ACTIVE_ASSISTANT_KEY, assistantId);
-    // Bind a fresh thread to the newly selected assistant so its config
-    // (model, tools, subagents) applies from the first message.
-    void switchThreadRef.current?.(null);
-    setThreadId(null);
-    threadIdRef.current = null;
-    localStorage.removeItem(CURRENT_THREAD_KEY);
-    writeThreadUrl(null, true);
   };
 
   const chooseModel = async (modelName: string) => {
@@ -817,7 +820,7 @@ export function App() {
       (runId) => runCheckpointSnapshots[runId]?.messages as Message[] | undefined,
       (runId) => runLiveMessages[runId],
       (message) => message.id,
-    );
+    ).filter(({ message }) => isMainAgentTranscriptMessage(message));
     // Optimistic messages trail the assembled transcript until confirmed.
     const pending = optimisticMessages.filter(
       (optimistic) => !entries.some(({ message }) => sameMessage(message, optimistic)),

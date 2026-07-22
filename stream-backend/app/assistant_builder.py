@@ -270,7 +270,6 @@ def build_agent(
     """
     try:
         from deepagents import create_deep_agent
-        from deepagents.backends.filesystem import FilesystemBackend
     except Exception as exc:  # pragma: no cover - environment dependent
         raise AssistantBuildError(f"deepagents not available: {exc}") from exc
 
@@ -298,7 +297,16 @@ def build_agent(
         if m.enabled
     ] or None
 
-    backend = FilesystemBackend(root_dir=str(assistant_dir))
+    # Only mount a real on-disk backend when the assistant actually has skills or
+    # memory to load from its folder. Otherwise use the default in-memory
+    # StateBackend so the agent's file tools (ls/read_file/write_file/glob/grep)
+    # operate on a virtual FS — never the host's real filesystem (which let the
+    # agent list C:\ and read its own config).
+    backend = None
+    if skills is not None or memory is not None:
+        from deepagents.backends.filesystem import FilesystemBackend
+
+        backend = FilesystemBackend(root_dir=str(assistant_dir))
     interrupt_on = _interrupt_on(config) or None
     extra_middleware = _build_extra_middleware(config, model, backend)
 
@@ -307,8 +315,9 @@ def build_agent(
         "tools": tools,
         "system_prompt": system_prompt,
         "subagents": subagents,
-        "backend": backend,
     }
+    if backend is not None:
+        kwargs["backend"] = backend
     if skills is not None:
         kwargs["skills"] = skills
     if memory is not None:

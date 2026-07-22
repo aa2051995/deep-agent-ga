@@ -3,10 +3,10 @@
   "name": "Deep Research Agent",
   "description": "Web research orchestrator that delegates to a researcher subagent.",
   "created_at": "2026-07-22T12:04:58.215244+00:00",
-  "updated_at": "2026-07-22T18:20:28.716703+00:00",
+  "updated_at": "2026-07-22T19:13:09.971845+00:00",
   "model": {
     "provider": "bedrock",
-    "name": "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "name": "moonshotai.kimi-k2.5",
     "temperature": 0.0,
     "max_tokens": null,
     "api_key": null

@@ -323,7 +323,9 @@ class ResearchDeepAgentRunner:
         hardcoded research agent is used.
         """
         if assistant_id and self._assistant_store.exists(assistant_id):
+            
             return await self._ensure_assistant_agent(assistant_id)
+        logger.info("agent.ensure.legacy was used because assistant_id=%s does not exist", assistant_id)
         return await self._ensure_legacy_agent()
 
     async def _ensure_assistant_agent(self, assistant_id: str) -> Any:

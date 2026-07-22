@@ -136,6 +136,24 @@ export function persistedOrLive<T>(persisted: T[] | undefined, live: T[] | undef
   return persisted && persisted.length > 0 ? persisted : live ?? [];
 }
 
+/**
+ * Whether a message belongs in the visible transcript: the main agent's own
+ * turns (human + AI text). It excludes the main agent's tool traffic —
+ * ToolMessages (`type: "tool"`: todo updates, filesystem listings, cancelled
+ * task notices) and AI messages that are *only* tool calls (no visible text) —
+ * which are internal. Subagent activity is rendered separately as cards, so it
+ * is unaffected by this filter.
+ */
+export function isMainAgentTranscriptMessage(type: string, text: string, hasToolCalls: boolean): boolean {
+  if (type === "tool") {
+    return false;
+  }
+  if (type === "ai" && text.trim().length === 0 && hasToolCalls) {
+    return false;
+  }
+  return true;
+}
+
 export type RunMessageEntry<T> = { message: T; runId: string | null };
 
 /**
