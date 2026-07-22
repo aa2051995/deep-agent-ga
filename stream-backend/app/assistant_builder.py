@@ -37,11 +37,18 @@ class AssistantBuildError(RuntimeError):
 # Tool registry
 # --------------------------------------------------------------------------
 def _tool_registry() -> dict[str, Any]:
-    """Name -> tool object for every custom tool the builder can attach."""
+    """Name -> tool object for every custom tool the builder can attach.
+
+    Degrades gracefully: if the research tools module fails to import (e.g. an
+    eager Tavily client with no API key), return an empty registry and warn so
+    that assistants which do not use those tools can still be built. Missing
+    tools are then skipped by :func:`_resolve_tools`.
+    """
     try:
         from research_agent.tools import tavily_search, think_tool
     except Exception as exc:  # pragma: no cover - environment dependent
-        raise AssistantBuildError(f"Could not import research tools: {exc}") from exc
+        logger.warning("assistant_builder.tool_registry_import_failed error=%s", exc)
+        return {}
     return {"tavily_search": tavily_search, "think_tool": think_tool}
 
 

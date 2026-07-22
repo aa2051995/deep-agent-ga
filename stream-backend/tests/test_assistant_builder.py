@@ -58,6 +58,9 @@ def test_load_mcp_tools_empty_without_servers():
 
 
 def test_resolve_tools_skips_unknown():
-    registry = ab._tool_registry()
+    # Use an explicit registry so the test exercises the pure resolution logic
+    # without importing research_agent.tools (whose root copy eagerly needs
+    # TAVILY_API_KEY and depends on sys.path ordering).
+    registry = {"tavily_search": object(), "think_tool": object()}
     resolved = ab._resolve_tools(["tavily_search", "does_not_exist"], registry)
     assert len(resolved) == 1

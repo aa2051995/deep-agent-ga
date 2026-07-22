@@ -50,7 +50,12 @@ Note: `stream-backend/app/main.py:122-137` contains a hardcoded `set_env()` that
 |---|---|
 | `main.py` | FastAPI app, all HTTP/WS routes, SSE frame formatting (legacy SDK + protocol-v2), run-checkpoint projection. |
 | `service.py` | `ProtocolService`: command dispatch, run scheduling (asyncio or Celery), cancel/resume, multitask rejection, reschedule logic. `AutoResearchRunner` (research→fixture fallback). |
-| `research_runtime.py` | `ResearchDeepAgentRunner`: actually runs the deepagents agent via `astream_events`, mirrors LangChain events → protocol events, manages Postgres checkpointer, Bedrock model-ID resolution, hot-reloads prompts on mtime change. |
+| `research_runtime.py` | `ResearchDeepAgentRunner`: actually runs the deepagents agent via `astream_events`, mirrors LangChain events → protocol events, manages Postgres checkpointer, Bedrock model-ID resolution, hot-reloads prompts on mtime change. Resolves the agent **per `assistant_id`** (folder-backed config → `assistant_builder`, else legacy) and persists the assistant snapshot on checkpoint save. |
+| `assistants.py` | `AssistantConfig` models + `AssistantStore`: folder-backed assistant definitions (one folder per assistant, `assistant.json` + `skills/` + `memory/`), CRUD, skill/memory writers, seeded default `deep-agent`. |
+| `assistant_builder.py` | Maps an `AssistantConfig` to `deepagents.create_deep_agent` (model, tools, MCP, skills, memory, subagents, middleware, and tool permissions via `interrupt_on`); `FilesystemBackend` rooted at the assistant folder. |
+| `assistant_catalog.py` | Buildable tools/middleware/providers/permissions served to the UI. |
+| `assistant_assist.py` | AI-assisted drafting of system prompts and skills (model when reachable, deterministic template fallback). |
+| `assistant_api.py` | FastAPI router for assistant CRUD, catalog, skill/memory writes, and assist endpoints; mounted in `main.py`. |
 | `deep_agent.py` | `DeepAgentDemoRunner`: deterministic fixture that emits a scripted event stream (used when the real agent is unavailable, and for tests). |
 | `event_bus.py` | `InMemoryEventBroker`, `RabbitMQStreamBroker`, `PublishingRepository` decorator, broker factory. |
 | `store.py` | `Repository` Protocol + `InMemoryRepository`. |
@@ -67,7 +72,7 @@ Note: `stream-backend/app/main.py:122-137` contains a hardcoded `set_env()` that
 `prompts.py` (orchestrator/subagent/researcher instructions) and `tools.py` (`tavily_search`, `think_tool`). Note the package is **duplicated** — a root copy and a `stream-backend/` copy; the backend inserts both parents onto `sys.path` (`research_runtime.py:23-39`).
 
 ### UI (`ui/src/`)
-`api.ts` (REST client), `stream.ts` (SDK `useStream` wrapper), `App.tsx`, `selectors.ts`, `types.ts`, `logger.ts`.
+`api.ts` (REST client), `stream.ts` (SDK `useStream` wrapper), `App.tsx`, `selectors.ts`, `types.ts`, `logger.ts`. Assistant management: `assistantApi.ts` (assistant REST client) + `AssistantManager.tsx` (list + tabbed editor for model/tools/MCP/skills/memory/subagents/middleware/permissions with AI-assist), mounted at `?assistants`.
 
 ---
 

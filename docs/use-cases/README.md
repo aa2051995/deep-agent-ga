@@ -11,6 +11,7 @@ Primary user-facing use cases for the Deep Research Agent, derived from the UI (
 | 5 | Continue a conversation (respond to input) | [05-respond-to-input.md](05-respond-to-input.md) |
 | 6 | Browse history (threads, runs, checkpoints) | [06-browse-history.md](06-browse-history.md) |
 | 7 | Manage threads (create / rename / delete) | [07-manage-threads.md](07-manage-threads.md) |
+| 8 | Create & manage assistants | [08-manage-assistants.md](08-manage-assistants.md) |
 
 ## UI execution-flow companions
 

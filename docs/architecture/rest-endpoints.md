@@ -720,3 +720,47 @@ sequenceDiagram
     end
     Client->>API: disconnect → cancel loops
 ```
+
+---
+
+## Assistant Management (`app/assistant_api.py`)
+
+Assistants are folder-backed deepagents definitions (one folder per assistant
+under `stream-backend/assistants/<assistant_id>/`, holding `assistant.json`,
+`skills/`, and `memory/`). The router is mounted from `main.py` via
+`app.include_router(assistant_router)`. Building a config into a live agent is
+handled by `app/assistant_builder.py`; the runtime resolves the agent per
+`assistant_id` in `research_runtime.ResearchDeepAgentRunner._ensure_agent`.
+
+| Method | Path | Handler | Purpose |
+|---|---|---|---|
+| GET | `/assistants` | `list_assistants` | List all assistant configs |
+| POST | `/assistants` | `create_assistant` | Create (409 if id exists) |
+| GET | `/assistants/catalog` | `get_catalog` | Buildable tools/middleware/providers/permissions |
+| POST | `/assistants/assist/system-prompt` | `assist_system_prompt` | AI-draft a system prompt |
+| POST | `/assistants/assist/skill` | `assist_skill` | AI-draft a SKILL.md |
+| GET | `/assistants/{assistant_id}` | `get_assistant` | Fetch one config |
+| PUT | `/assistants/{assistant_id}` | `update_assistant` | Replace a config |
+| DELETE | `/assistants/{assistant_id}` | `delete_assistant` | Remove the assistant folder |
+| POST | `/assistants/{assistant_id}/skills` | `write_skill` | Write a SKILL.md + register it |
+| POST | `/assistants/{assistant_id}/memory` | `write_memory` | Write an AGENTS.md + register it |
+
+### Config → agent mapping
+
+`AssistantConfig` fields map onto `deepagents.create_deep_agent` as:
+
+- `model` → a chat model built by provider (`google` / `anthropic` / `bedrock` / `openai`).
+- `tools` → resolved from the tool registry; `deny` drops the tool, `ask` adds it to `interrupt_on`.
+- `mcp` → tools loaded via `langchain_mcp_adapters` when installed (best-effort; skipped otherwise).
+- `skills` → POSIX paths under the assistant folder for `SkillsMiddleware`.
+- `memory` → `AGENTS.md` paths under the assistant folder (always in the prompt).
+- `subagents` → deepagents `SubAgent` dicts, delegated to via the `task` tool.
+- `middleware` → optional extra layers on top of the always-on deepagents stack.
+- permissions → tools/MCP marked `ask` become `interrupt_on` (human-in-the-loop).
+
+### Persist-on-checkpoint
+
+When a run's final checkpoint is saved, `_persist_assistant_snapshot` flushes the
+assistant folder and records the config snapshot in the thread metadata
+(`assistant_id`, `assistant_snapshot`) so the exact assistant used for a run is
+reproducible even if it is later edited.
