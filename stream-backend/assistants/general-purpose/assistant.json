@@ -6,9 +6,10 @@
   "updated_at": "2026-07-22T17:59:43.663840+00:00",
   "model": {
     "provider": "bedrock",
-    "name": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+    "name": "eu.anthropic.claude-3-5-sonnet-20240620-v1:0",
     "temperature": 0.0,
-    "max_tokens": null
+    "max_tokens": null,
+    "api_key": null
   },
   "system_prompt": "",
   "tools": [],

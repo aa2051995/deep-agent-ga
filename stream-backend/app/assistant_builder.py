@@ -88,23 +88,33 @@ def build_model(config: AssistantConfig) -> Any:
             kwargs["api_key"] = api_key
         return init_chat_model(**kwargs)
     if provider == "bedrock":
-        from .research_runtime import bedrock_model_kwargs
-
         try:
             from langchain_aws import ChatBedrockConverse
         except Exception as exc:  # pragma: no cover - environment dependent
             raise AssistantBuildError(
                 "Install langchain-aws to use the bedrock provider."
             ) from exc
-        # bedrock_model_kwargs reads RESEARCH_AGENT_MODEL/AWS_* env; override the
-        # model id with the assistant's configured name when it looks like an id.
-        os.environ.setdefault("RESEARCH_AGENT_MODEL", name)
-        kwargs = bedrock_model_kwargs()
-        kwargs["model"] = name if ("." in name or ":" in name or "/" in name) else kwargs["model"]
-        kwargs["temperature"] = temperature
+        # Use the assistant's OWN configured model id (not RESEARCH_AGENT_MODEL
+        # from the env, which caused a Google model name to be sent to Bedrock).
+        # Region/profile/endpoint still come from the AWS_* env.
+        region = (
+            os.getenv("RESEARCH_AGENT_AWS_REGION")
+            or os.getenv("AWS_BEDROCK_REGION")
+            or os.getenv("AWS_REGION")
+            or os.getenv("AWS_DEFAULT_REGION")
+        )
+        profile = os.getenv("AWS_PROFILE") or os.getenv("AWS_BEDROCK_PROFILE")
+        endpoint = os.getenv("AWS_BEDROCK_ENDPOINT_URL")
+        bedrock_kwargs: dict[str, Any] = {"model": name, "temperature": temperature}
+        if region:
+            bedrock_kwargs["region_name"] = region
+        if profile:
+            bedrock_kwargs["credentials_profile_name"] = profile
+        if endpoint:
+            bedrock_kwargs["endpoint_url"] = endpoint
         if config.model.max_tokens:
-            kwargs["max_tokens"] = config.model.max_tokens
-        return ChatBedrockConverse(**kwargs)
+            bedrock_kwargs["max_tokens"] = config.model.max_tokens
+        return ChatBedrockConverse(**bedrock_kwargs)
     # default: google
     from langchain_google_genai import ChatGoogleGenerativeAI
 

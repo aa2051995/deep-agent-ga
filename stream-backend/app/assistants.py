@@ -293,17 +293,90 @@ class AssistantStore:
                 logger.exception("assistants.seed_failed id=%s", config.assistant_id)
 
 
+VALID_PROVIDERS: tuple[str, ...] = ("google", "anthropic", "bedrock", "openai")
+
+
+def bedrock_region_prefix() -> str:
+    """Cross-region inference-profile prefix for the configured AWS region.
+
+    Anthropic (and several other) Bedrock models are only invocable through a
+    regional inference profile (e.g. ``eu.anthropic...``), not the bare model id.
+    Pick the prefix from the AWS region so the default id actually resolves.
+    """
+    region = (
+        os.getenv("RESEARCH_AGENT_AWS_REGION")
+        or os.getenv("AWS_BEDROCK_REGION")
+        or os.getenv("AWS_REGION")
+        or os.getenv("AWS_DEFAULT_REGION")
+        or ""
+    ).lower()
+    if region.startswith("eu"):
+        return "eu."
+    if region.startswith("us"):
+        return "us."
+    if region.startswith("ap"):
+        return "apac."
+    return ""
+
+
+def default_model_for(provider: str) -> str:
+    """A valid default model id for ``provider`` (region-aware for Bedrock)."""
+    if provider == "anthropic":
+        return "claude-sonnet-4-5-20250929"
+    if provider == "openai":
+        return "gpt-4o"
+    if provider == "bedrock":
+        return f"{bedrock_region_prefix()}anthropic.claude-3-5-sonnet-20240620-v1:0"
+    return "gemini-2.5-pro"
+
+
+def model_matches_provider(provider: str, name: str) -> bool:
+    """Heuristic check that ``name`` is a plausible model id for ``provider``.
+
+    Guards against inconsistent pairs (e.g. provider=bedrock, name=gemini-...).
+    """
+    lowered = (name or "").lower()
+    if not lowered:
+        return False
+    if provider == "google":
+        return "gemini" in lowered
+    if provider == "anthropic":
+        # Direct Anthropic ids are bare (no vendor "." prefix like bedrock uses).
+        return lowered.startswith("claude") and "." not in lowered.split(":")[0]
+    if provider == "openai":
+        return lowered.startswith(("gpt", "o1", "o3", "o4", "chatgpt"))
+    if provider == "bedrock":
+        # provider.model[:version] shape, optionally with a region profile prefix.
+        return "." in lowered and any(
+            vendor in lowered
+            for vendor in ("anthropic", "amazon", "meta", "mistral", "cohere", "ai21", "nova")
+        )
+    return True
+
+
+def consistent_model(provider: str, name: str | None) -> str:
+    """Return ``name`` if it fits ``provider``, otherwise the provider default."""
+    if name and model_matches_provider(provider, name):
+        return name
+    return default_model_for(provider)
+
+
 def default_seed_assistants() -> list[AssistantConfig]:
     """Ship a ready-to-run assistant mirroring the legacy research agent."""
     provider = os.getenv("RESEARCH_AGENT_PROVIDER", "google").strip().lower()
-    model_name = os.getenv("RESEARCH_AGENT_MODEL", "gemini-2.5-pro")
+    if provider not in VALID_PROVIDERS:
+        provider = "google"
+    # Keep provider and model consistent: an env RESEARCH_AGENT_MODEL that does
+    # not belong to the provider (e.g. a Google id under bedrock) is replaced
+    # with the provider's valid default.
+    model_name = consistent_model(provider, os.getenv("RESEARCH_AGENT_MODEL"))
     return [
         AssistantConfig(
             assistant_id="deep-agent",
             name="Deep Research Agent",
             description="Web research orchestrator that delegates to a researcher subagent.",
             model=ModelConfig(
-                provider=provider if provider in {"google", "anthropic", "bedrock", "openai"} else "google",
+                provider=provider,
                 name=model_name,
                 temperature=0.0,
             ),

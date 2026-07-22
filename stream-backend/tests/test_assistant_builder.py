@@ -96,6 +96,29 @@ def test_build_model_omits_api_key_when_absent(monkeypatch):
     assert "api_key" not in captured
 
 
+def test_build_model_bedrock_uses_config_name(monkeypatch):
+    captured = {}
+
+    class FakeBedrock:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    import langchain_aws
+
+    monkeypatch.setattr(langchain_aws, "ChatBedrockConverse", FakeBedrock)
+    monkeypatch.setenv("AWS_REGION", "eu-north-1")
+    # Even with a stray RESEARCH_AGENT_MODEL env, the assistant's own id wins.
+    monkeypatch.setenv("RESEARCH_AGENT_MODEL", "gemini-2.5-pro")
+    config = AssistantConfig(
+        assistant_id="t",
+        name="T",
+        model={"provider": "bedrock", "name": "eu.anthropic.claude-3-5-sonnet-20240620-v1:0"},
+    )
+    ab.build_model(config)
+    assert captured["model"] == "eu.anthropic.claude-3-5-sonnet-20240620-v1:0"
+    assert captured["region_name"] == "eu-north-1"
+
+
 def test_resolve_tools_skips_unknown():
     # Use an explicit registry so the test exercises the pure resolution logic
     # without importing research_agent.tools (whose root copy eagerly needs

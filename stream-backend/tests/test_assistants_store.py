@@ -12,6 +12,9 @@ from app.assistants import (
     AssistantStore,
     ModelConfig,
     ToolConfig,
+    consistent_model,
+    default_model_for,
+    model_matches_provider,
     slugify,
 )
 
@@ -105,6 +108,40 @@ def test_write_memory_registers_and_persists(store, tmp_path):
     entry = store.write_memory("m", "AGENTS", "# project notes")
     assert entry.path == "memory/AGENTS.md"
     assert (tmp_path / "m" / "memory" / "AGENTS.md").is_file()
+
+
+def test_model_matches_provider():
+    assert model_matches_provider("google", "gemini-2.5-pro")
+    assert not model_matches_provider("google", "gpt-4o")
+    assert model_matches_provider("anthropic", "claude-sonnet-4-5-20250929")
+    # A bedrock-shaped id is not a direct-anthropic id.
+    assert not model_matches_provider("anthropic", "anthropic.claude-3-5-sonnet-20240620-v1:0")
+    assert model_matches_provider("openai", "gpt-4o")
+    assert model_matches_provider("bedrock", "eu.anthropic.claude-3-5-sonnet-20240620-v1:0")
+    assert model_matches_provider("bedrock", "amazon.nova-pro-v1:0")
+    # The exact mismatch that broke a real run: a Google model under bedrock.
+    assert not model_matches_provider("bedrock", "gemini-2.5-pro")
+
+
+def test_consistent_model_replaces_mismatch():
+    # A Google name under bedrock is replaced with the bedrock default.
+    result = consistent_model("bedrock", "gemini-2.5-pro")
+    assert result != "gemini-2.5-pro"
+    assert model_matches_provider("bedrock", result)
+    # A matching name is preserved.
+    assert consistent_model("google", "gemini-2.5-flash") == "gemini-2.5-flash"
+    # No name falls back to the provider default.
+    assert consistent_model("openai", None) == default_model_for("openai")
+
+
+def test_seed_pairs_provider_and_model(monkeypatch):
+    monkeypatch.setenv("RESEARCH_AGENT_PROVIDER", "bedrock")
+    monkeypatch.setenv("RESEARCH_AGENT_MODEL", "gemini-2.5-pro")  # wrong provider
+    from app.assistants import default_seed_assistants
+
+    seed = default_seed_assistants()[0]
+    assert seed.model.provider == "bedrock"
+    assert model_matches_provider("bedrock", seed.model.name)
 
 
 def test_ensure_seeded_creates_default(store):
