@@ -57,6 +57,45 @@ def test_load_mcp_tools_empty_without_servers():
     assert asyncio.run(ab.load_mcp_tools(config)) == []
 
 
+def test_build_model_passes_api_key_openai(monkeypatch):
+    captured = {}
+
+    def fake_init_chat_model(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    import langchain.chat_models as cm
+
+    monkeypatch.setattr(cm, "init_chat_model", fake_init_chat_model)
+    config = AssistantConfig(
+        assistant_id="t",
+        name="T",
+        model={"provider": "openai", "name": "gpt-4o", "temperature": 0.2, "api_key": "sk-test"},
+    )
+    ab.build_model(config)
+    assert captured["api_key"] == "sk-test"
+    assert captured["model"] == "openai:gpt-4o"
+
+
+def test_build_model_omits_api_key_when_absent(monkeypatch):
+    captured = {}
+
+    def fake_init_chat_model(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    import langchain.chat_models as cm
+
+    monkeypatch.setattr(cm, "init_chat_model", fake_init_chat_model)
+    config = AssistantConfig(
+        assistant_id="t",
+        name="T",
+        model={"provider": "anthropic", "name": "claude-sonnet-4-5-20250929"},
+    )
+    ab.build_model(config)
+    assert "api_key" not in captured
+
+
 def test_resolve_tools_skips_unknown():
     # Use an explicit registry so the test exercises the pure resolution logic
     # without importing research_agent.tools (whose root copy eagerly needs

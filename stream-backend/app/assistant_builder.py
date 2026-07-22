@@ -70,16 +70,23 @@ def build_model(config: AssistantConfig) -> Any:
     provider = config.model.provider
     name = config.model.name
     temperature = config.model.temperature
+    api_key = (config.model.api_key or "").strip() or None
     if provider == "anthropic":
         from langchain.chat_models import init_chat_model
 
         model_id = name if ":" in name else f"anthropic:{name}"
-        return init_chat_model(model=model_id, temperature=temperature)
+        kwargs: dict[str, Any] = {"model": model_id, "temperature": temperature}
+        if api_key:
+            kwargs["api_key"] = api_key
+        return init_chat_model(**kwargs)
     if provider == "openai":
         from langchain.chat_models import init_chat_model
 
         model_id = name if ":" in name else f"openai:{name}"
-        return init_chat_model(model=model_id, temperature=temperature)
+        kwargs = {"model": model_id, "temperature": temperature}
+        if api_key:
+            kwargs["api_key"] = api_key
+        return init_chat_model(**kwargs)
     if provider == "bedrock":
         from .research_runtime import bedrock_model_kwargs
 
@@ -104,7 +111,7 @@ def build_model(config: AssistantConfig) -> Any:
     return ChatGoogleGenerativeAI(
         model=name,
         temperature=temperature,
-        api_key=os.getenv("GOOGLE_API_KEY"),
+        api_key=api_key or os.getenv("GOOGLE_API_KEY"),
     )
 
 

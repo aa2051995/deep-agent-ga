@@ -109,6 +109,22 @@ def test_assist_system_prompt_template_fallback(client):
     assert "Helper" in body["content"]
 
 
+def test_test_model_reports_failure(client, monkeypatch):
+    monkeypatch.setattr(
+        assistant_api,
+        "probe_model",
+        lambda model: {"ok": False, "message": f"bad key for {model.provider}"},
+    )
+    response = client.post(
+        "/assistants/assist/test-model",
+        json={"model": {"provider": "openai", "name": "gpt-4o", "api_key": "nope"}},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is False
+    assert "openai" in body["message"]
+
+
 def test_assist_skill_template_fallback(client):
     response = client.post(
         "/assistants/assist/skill",

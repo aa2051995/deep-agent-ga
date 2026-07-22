@@ -51,6 +51,10 @@ class ModelConfig(BaseModel):
     name: str = "gemini-2.5-pro"
     temperature: float = 0.0
     max_tokens: int | None = None
+    # Optional API key for the provider. When empty, the builder falls back to
+    # the provider's standard environment variable (GOOGLE_API_KEY, etc.).
+    # Bedrock uses AWS credentials/profile, not this field.
+    api_key: str | None = None
 
 
 class ToolConfig(BaseModel):

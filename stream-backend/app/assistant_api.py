@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .assistant_assist import generate_skill, generate_system_prompt
+from .assistant_assist import generate_skill, generate_system_prompt, probe_model
 from .assistant_catalog import catalog
 from .assistants import (
     AssistantConfig,
@@ -85,6 +85,10 @@ class PromptDraftRequest(BaseModel):
     model: ModelConfig | None = None
 
 
+class TestModelRequest(BaseModel):
+    model: ModelConfig
+
+
 class SkillWriteRequest(BaseModel):
     name: str
     content: str
@@ -126,6 +130,18 @@ async def assist_skill(request: SkillDraftRequest) -> dict[str, Any]:
         model_config=request.model,
         instructions=request.instructions,
     )
+
+
+@router.post("/assist/test-model")
+def test_model(request: TestModelRequest) -> dict[str, Any]:
+    # Sync handler: FastAPI runs it in a threadpool, so the blocking model
+    # round-trip doesn't stall the event loop.
+    logger.info(
+        "assistant_api.assist.test_model provider=%s model=%s",
+        request.model.provider,
+        request.model.name,
+    )
+    return probe_model(request.model)
 
 
 # --------------------------------------------------------------------------

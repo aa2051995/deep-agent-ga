@@ -75,7 +75,12 @@ The chat header has two dropdowns (`App.tsx`):
   run because the folder's `assistant.json` mtime changed.
 
 In the manage UI, the **Model** tab offers the same per-provider dropdown with a
-"Custom…" option for arbitrary model ids.
+"Custom…" option for arbitrary model ids. Switching provider automatically
+selects that provider's default model so the pair stays consistent. The tab also
+has an optional **API key** field (stored on the assistant's `model.api_key`,
+falling back to the provider env var; Bedrock uses AWS credentials) and a
+**Test model** button that calls `POST /assistants/assist/test-model` to confirm
+the provider/model/key actually work before saving.
 
 ## AI-assisted authoring
 

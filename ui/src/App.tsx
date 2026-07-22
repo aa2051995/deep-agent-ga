@@ -602,6 +602,7 @@ export function App() {
   const [runSubagentCards, setRunSubagentCards] = useState<Record<string, SubagentCard[]>>({});
   const [optimisticMessages, setOptimisticMessages] = useState<Message[]>([]);
   const [openThreadMenu, setOpenThreadMenu] = useState<string | null>(null);
+  const threadMenuRef = useRef<HTMLDivElement | null>(null);
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const [runCheckpointSnapshots, setRunCheckpointSnapshots] = useState<Record<string, RunCheckpointSnapshot>>({});
@@ -1292,19 +1293,30 @@ export function App() {
   }
 //E1
   useEffect(() => {
-    const closeMenu = (): void => setOpenThreadMenu(null);
-    const closeOnEscape = (event: KeyboardEvent): void => {
+    if (openThreadMenu === null) {
+      return undefined;
+    }
+    // Close on the next interaction outside the open menu. Using pointerdown
+    // (not a bubbling window "click" that relied on stopPropagation inside the
+    // menu) means the menu reliably closes on any outside click — including the
+    // "New research" button — and never lingers.
+    const onPointerDown = (event: MouseEvent): void => {
+      if (threadMenuRef.current && !threadMenuRef.current.contains(event.target as Node)) {
+        setOpenThreadMenu(null);
+      }
+    };
+    const onEscape = (event: KeyboardEvent): void => {
       if (event.key === "Escape") {
         setOpenThreadMenu(null);
       }
     };
-    window.addEventListener("click", closeMenu);
-    window.addEventListener("keydown", closeOnEscape);
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onEscape);
     return () => {
-      window.removeEventListener("click", closeMenu);
-      window.removeEventListener("keydown", closeOnEscape);
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onEscape);
     };
-  }, []);
+  }, [openThreadMenu]);
 //E2
   useEffect(() => {
     if (stream.messages.length === 0) {
@@ -1823,14 +1835,18 @@ export function App() {
                 <MessageSquare size={15} />
                 <span>{thread.title}</span>
               </button>
-              <div className="thread-menu-wrap" onClick={(event) => event.stopPropagation()}>
+              <div
+                className="thread-menu-wrap"
+                ref={openThreadMenu === thread.threadId ? threadMenuRef : undefined}
+              >
                 <button
                   aria-expanded={openThreadMenu === thread.threadId}
                   aria-haspopup="menu"
                   className="thread-menu-trigger"
-                  onClick={() =>
-                    setOpenThreadMenu((current) => (current === thread.threadId ? null : thread.threadId))
-                  }
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setOpenThreadMenu((current) => (current === thread.threadId ? null : thread.threadId));
+                  }}
                   type="button"
                   title="Thread actions"
                 >

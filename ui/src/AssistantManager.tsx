@@ -15,8 +15,10 @@ import {
   type CatalogModel,
   type MCPServerConfig,
   type MiddlewareConfig,
+  type ModelConfig,
   type Permission,
   type SubAgentConfig,
+  type TestModelResult,
   type ToolConfig,
   createAssistant,
   deleteAssistant,
@@ -25,6 +27,7 @@ import {
   emptyAssistant,
   fetchCatalog,
   listAssistants,
+  testModel,
   updateAssistant,
   writeMemory,
   writeSkill,
@@ -341,16 +344,41 @@ function ModelTab({
   catalog: Catalog;
 }) {
   const model = draft.model;
+  const provider = catalog.providers.find((p) => p.name === model.provider);
+  const [testing, setTesting] = useState(false);
+  const [result, setResult] = useState<TestModelResult | null>(null);
+
+  // Keep provider and model consistent: switching provider selects that
+  // provider's first (default) model so the pair is always valid.
+  const changeProvider = (nextProvider: ModelConfig["provider"]) => {
+    const next = catalog.providers.find((p) => p.name === nextProvider);
+    const firstModel = next?.models?.[0]?.name ?? next?.example ?? model.name;
+    setResult(null);
+    patch({ model: { ...model, provider: nextProvider, name: firstModel } });
+  };
+
+  const runTest = async () => {
+    setTesting(true);
+    setResult(null);
+    try {
+      setResult(await testModel(model));
+    } catch (err) {
+      setResult({ ok: false, message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const keyLabel =
+    model.provider === "bedrock"
+      ? "API key (Bedrock uses AWS credentials — leave blank)"
+      : `API key (optional — falls back to the ${model.provider.toUpperCase()} env var)`;
+
   return (
     <div className="am-form">
       <label className="am-field">
         <span>Provider</span>
-        <select
-          value={model.provider}
-          onChange={(e) =>
-            patch({ model: { ...model, provider: e.target.value as typeof model.provider } })
-          }
-        >
+        <select value={model.provider} onChange={(e) => changeProvider(e.target.value as ModelConfig["provider"])}>
           {catalog.providers.map((p) => (
             <option key={p.name} value={p.name}>
               {p.label}
@@ -360,10 +388,41 @@ function ModelTab({
       </label>
       <ModelNameField
         value={model.name}
-        models={catalog.providers.find((p) => p.name === model.provider)?.models ?? []}
-        example={catalog.providers.find((p) => p.name === model.provider)?.example}
-        onChange={(name) => patch({ model: { ...model, name } })}
+        models={provider?.models ?? []}
+        example={provider?.example}
+        onChange={(name) => {
+          setResult(null);
+          patch({ model: { ...model, name } });
+        }}
       />
+      <label className="am-field">
+        <span>{keyLabel}</span>
+        <input
+          type="password"
+          autoComplete="off"
+          value={model.api_key ?? ""}
+          disabled={model.provider === "bedrock"}
+          onChange={(e) => {
+            setResult(null);
+            patch({ model: { ...model, api_key: e.target.value ? e.target.value : null } });
+          }}
+          placeholder={model.provider === "bedrock" ? "—" : "Paste a key to override the environment variable"}
+        />
+      </label>
+      <div className="am-field">
+        <div className="am-assist-row">
+          <button className="am-ghost" type="button" onClick={() => void runTest()} disabled={testing}>
+            <Sparkles size={14} /> {testing ? "Testing…" : "Test model"}
+          </button>
+          {result && (
+            <span className={result.ok ? "am-test-ok" : "am-test-fail"}>
+              {result.ok ? "✓ " : "✕ "}
+              {result.message}
+              {result.sample ? ` — “${result.sample}”` : ""}
+            </span>
+          )}
+        </div>
+      </div>
       <label className="am-field">
         <span>Temperature</span>
         <input

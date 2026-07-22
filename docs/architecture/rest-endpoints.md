@@ -739,6 +739,7 @@ handled by `app/assistant_builder.py`; the runtime resolves the agent per
 | GET | `/assistants/catalog` | `get_catalog` | Buildable tools/middleware/providers/permissions |
 | POST | `/assistants/assist/system-prompt` | `assist_system_prompt` | AI-draft a system prompt |
 | POST | `/assistants/assist/skill` | `assist_skill` | AI-draft a SKILL.md |
+| POST | `/assistants/assist/test-model` | `test_model` | Verify a `ModelConfig` (provider/model/api key) with a tiny round-trip |
 | GET | `/assistants/{assistant_id}` | `get_assistant` | Fetch one config |
 | PUT | `/assistants/{assistant_id}` | `update_assistant` | Replace a config |
 | DELETE | `/assistants/{assistant_id}` | `delete_assistant` | Remove the assistant folder |

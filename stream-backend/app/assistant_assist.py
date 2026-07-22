@@ -32,6 +32,41 @@ SKILL_META = (
 )
 
 
+def probe_model(model_config: ModelConfig) -> dict[str, Any]:
+    """Construct the model and do a tiny round-trip to verify it works.
+
+    Returns ``{"ok": bool, "message": str, "sample": str}``. Surfaces the real
+    provider error (bad key, unknown model, missing package) instead of hiding
+    it, so the UI's "Test" button can show why a config fails.
+    """
+    try:
+        from .assistant_builder import build_model
+        from .assistants import AssistantConfig
+
+        stub = AssistantConfig(assistant_id="_probe", name="probe", model=model_config)
+        model = build_model(stub)
+    except Exception as exc:
+        return {"ok": False, "message": f"Could not construct model: {exc}"}
+    try:
+        from langchain_core.messages import HumanMessage
+
+        result = model.invoke([HumanMessage(content="Reply with the single word: ok")])
+        content = getattr(result, "content", result)
+        if isinstance(content, list):
+            content = "".join(
+                str(block.get("text", "")) if isinstance(block, dict) else str(block)
+                for block in content
+            )
+        sample = str(content).strip()[:200]
+        return {
+            "ok": True,
+            "message": f"{model_config.provider}:{model_config.name} responded successfully.",
+            "sample": sample,
+        }
+    except Exception as exc:
+        return {"ok": False, "message": str(exc)}
+
+
 def _try_model(model_config: ModelConfig) -> Any | None:
     try:
         from .assistant_builder import build_model

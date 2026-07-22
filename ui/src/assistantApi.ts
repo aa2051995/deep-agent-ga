@@ -9,6 +9,7 @@ export interface ModelConfig {
   name: string;
   temperature: number;
   max_tokens: number | null;
+  api_key?: string | null;
 }
 
 export interface ToolConfig {
@@ -233,11 +234,28 @@ export async function draftSkill(
   );
 }
 
+export interface TestModelResult {
+  ok: boolean;
+  message: string;
+  sample?: string;
+}
+
+export async function testModel(model: ModelConfig, apiUrl = DEFAULT_API_URL): Promise<TestModelResult> {
+  return json(
+    await fetch(`${apiUrl}/assistants/assist/test-model`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model }),
+    }),
+    "Test model",
+  );
+}
+
 export function emptyAssistant(): AssistantUpsert {
   return {
     name: "",
     description: "",
-    model: { provider: "google", name: "gemini-2.5-pro", temperature: 0, max_tokens: null },
+    model: { provider: "google", name: "gemini-2.5-pro", temperature: 0, max_tokens: null, api_key: null },
     system_prompt: "",
     tools: [],
     mcp: [],

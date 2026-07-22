@@ -3,7 +3,7 @@
   "name": "general-purpose",
   "description": "",
   "created_at": "2026-07-22T17:33:53.103603+00:00",
-  "updated_at": "2026-07-22T17:33:53.103603+00:00",
+  "updated_at": "2026-07-22T17:59:43.663840+00:00",
   "model": {
     "provider": "bedrock",
     "name": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -11,16 +11,7 @@
     "max_tokens": null
   },
   "system_prompt": "",
-  "tools": [
-    {
-      "name": "tavily_search",
-      "permission": "allow"
-    },
-    {
-      "name": "think_tool",
-      "permission": "allow"
-    }
-  ],
+  "tools": [],
   "mcp": [],
   "skills": [],
   "memory": [],
