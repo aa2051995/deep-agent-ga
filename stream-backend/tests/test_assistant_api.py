@@ -69,6 +69,22 @@ def test_create_get_update_delete(client):
     assert client.get(f"/assistants/{assistant_id}").status_code == 404
 
 
+def test_delete_route_is_204_with_no_response_body(client):
+    """Regression: with ``from __future__ import annotations`` the ``-> None``
+    return hint resolves to the NoneType class, which FastAPI would treat as a
+    response body and reject on a 204 ("Status code 204 must not have a response
+    body") at import time. The route declares ``response_model=None`` to prevent
+    that; assert the module imports and the delete returns an empty 204 body.
+    """
+    create = client.post("/assistants", json={"name": "Ephemeral"})
+    assert create.status_code == 201, create.text
+    assistant_id = create.json()["assistant_id"]
+
+    deleted = client.delete(f"/assistants/{assistant_id}")
+    assert deleted.status_code == 204
+    assert deleted.content == b""  # no body, per the 204 contract
+
+
 def test_create_duplicate_conflict(client):
     client.post("/assistants", json={"name": "Dup"})
     again = client.post("/assistants", json={"assistant_id": "dup", "name": "Dup"})

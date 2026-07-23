@@ -191,7 +191,11 @@ async def update_assistant(assistant_id: str, payload: AssistantUpsert) -> dict[
     return updated.model_dump(mode="json")
 
 
-@router.delete("/{assistant_id}", status_code=204)
+# response_model=None is required: with `from __future__ import annotations`,
+# the `-> None` return hint resolves to the NoneType *class* (truthy), which
+# FastAPI would otherwise treat as a response body and reject on a 204
+# ("Status code 204 must not have a response body"), failing at import time.
+@router.delete("/{assistant_id}", status_code=204, response_model=None)
 async def delete_assistant(assistant_id: str) -> None:
     try:
         store().delete(assistant_id)

@@ -8,6 +8,11 @@ langchain>=0.3.0
 langchain-core>=0.3.0
 langchain-aws>=0.2.0
 langchain-google-genai>=2.0.0
+langgraph>=0.2.0
 langgraph-checkpoint-postgres>=2.0.0
 psycopg[binary,pool]>=3.2.0
 tavily-python>=0.5.0
+boto3>=1.34.0
+# Optional: only needed for assistants that use MCP tools (imported behind a
+# try/except in app/assistant_builder.py; the app degrades gracefully without it).
+# langchain-mcp-adapters>=0.1.0
