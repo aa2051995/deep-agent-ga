@@ -73,13 +73,21 @@ broker.
   assistant's own `model.provider` / `model.name`. `RESEARCH_AGENT_PROVIDER` /
   `RESEARCH_AGENT_MODEL` (chart values `app.research.*`) are only a **fallback**
   for an `assistant_id` that has no stored config.
-- **Shared assistant store.** Assistants are files under
-  `STREAM_BACKEND_ASSISTANTS_DIR` (default: baked into the image, read-only).
-  Because the **worker** executes the agent, it must see the same assistants the
-  apiserver serves. Enable `app.assistantsStore.persistence` to mount one RWX
-  volume (EFS) on both, with an init container that seeds the baked-in assistants
-  the first time. Without it, only the image's seeded assistants are used and
-  UI-created/edited assistants are per-pod and lost on restart.
+- **Assistant store (config + skill/memory files).** Because the **worker**
+  executes the agent, it must see the same assistants the apiserver serves. Two
+  backends (`app.assistantsStore.backend`):
+  - **`postgres`** (recommended) — configs and skill/memory file bodies live in
+    Postgres (`stream_assistants` + `stream_assistant_files`), which both tiers
+    already share. `path_for()` materializes an assistant into a per-pod scratch
+    dir at build time for deepagents' `FilesystemBackend`. **No shared volume
+    needed.** The store migrates the image's baked-in assistants into Postgres on
+    first startup.
+  - **`filesystem`** (default) — assistants are folders under
+    `STREAM_BACKEND_ASSISTANTS_DIR`. For the worker to see UI edits, enable
+    `app.assistantsStore.persistence` to mount one RWX volume (EFS) on both, with
+    an init container that seeds the baked-in assistants. Without it, only the
+    image's baked assistants are shared; runtime edits are per-pod and lost on
+    restart.
 - **Secrets** (model/tool API keys, AWS credentials) come from a chart-managed
   `Secret` (or a pre-existing one via `secrets.existingSecret`) and are mounted
   as `secretKeyRef` env with `optional: true`.

@@ -187,6 +187,21 @@ def test_assistant_store_disabled_by_default(manifests):
         assert "STREAM_BACKEND_ASSISTANTS_DIR" not in _env_map(_by(manifests, "Deployment", component))
 
 
+def test_postgres_assistant_store_backend():
+    """backend=postgres sets STREAM_BACKEND_ASSISTANT_STORE on apiserver + worker
+    and needs no shared volume (assistants live in Postgres)."""
+    manifests = _render("--set", "app.assistantsStore.backend=postgres")
+    for component in ("apiserver", "worker"):
+        env = _env_map(_by(manifests, "Deployment", component))
+        assert env["STREAM_BACKEND_ASSISTANT_STORE"]["value"] == "postgres"
+    assert not [m for m in manifests if m.get("kind") == "PersistentVolumeClaim"]
+
+
+def test_filesystem_backend_sets_no_assistant_store_env(manifests):
+    for component in ("apiserver", "worker"):
+        assert "STREAM_BACKEND_ASSISTANT_STORE" not in _env_map(_by(manifests, "Deployment", component))
+
+
 def test_external_postgres_replaces_statefulset():
     manifests = _render(
         "--set", "postgres.external.enabled=true",

@@ -26,6 +26,7 @@ from .assistants import (
     SkillConfig,
     SubAgentConfig,
     ToolConfig,
+    create_assistant_store,
     slugify,
 )
 
@@ -33,7 +34,7 @@ logger = logging.getLogger("stream_backend.assistant_api")
 
 router = APIRouter(prefix="/assistants", tags=["assistants"])
 
-_store = AssistantStore()
+_store = create_assistant_store()
 try:
     _store.ensure_seeded()
 except Exception:  # pragma: no cover - defensive

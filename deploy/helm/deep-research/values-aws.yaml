@@ -23,15 +23,14 @@ app:
     region: eu-north-1
     # Prefer IRSA over static keys — leave useProfile false and attach a role below.
     useProfile: false
-  # Share the assistant store (per-assistant model/provider) across apiserver +
-  # worker so UI-created/edited assistants reach the worker and survive restarts.
-  # Requires the AWS EFS CSI driver and an RWX StorageClass (below).
+  # Store assistants (config + skill/memory files) in Postgres, shared by
+  # apiserver + worker. This makes per-assistant model/provider work everywhere
+  # and survive restarts WITHOUT an EFS volume. (Alternatively set
+  # backend: filesystem and persistence.enabled: true for a shared EFS volume.)
   assistantsStore:
+    backend: postgres
     persistence:
-      enabled: true
-      storageClassName: efs-sc     # create an EFS-backed StorageClass named efs-sc
-      # existingClaim: ""          # or bind a pre-provisioned EFS PVC instead
-      size: 1Gi
+      enabled: false
 
 serviceAccount:
   create: true

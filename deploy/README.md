@@ -126,16 +126,30 @@ All knobs live in [`helm/deep-research/values.yaml`](helm/deep-research/values.y
 - `apiserver.autoscaling.*`, `worker.autoscaling.*`, `ui.autoscaling.*` — HPA bounds.
 - `app.research.provider` / `app.research.model` — **fallback** agent model only;
   real runs use each assistant's own model/provider from its stored config.
-- `app.assistantsStore.persistence.enabled` — share the assistant store across
-  apiserver + worker over an RWX/EFS volume so UI-created/edited assistants reach
-  the worker and survive restarts (see below). Off by default (baked-in, read-only).
+- `app.assistantsStore.backend` — `postgres` stores assistants (config + skill/
+  memory files) in Postgres, shared by apiserver + worker with **no EFS needed**
+  (recommended); `filesystem` (default) uses folders + the optional shared volume.
+- `app.assistantsStore.persistence.enabled` — filesystem backend only: share the
+  store over an RWX/EFS volume so UI-created/edited assistants reach the worker
+  and survive restarts (see below). Off by default (baked-in, read-only).
 - `ui.apiUrl` — browser API base (`/api` = same-origin via nginx).
 
-### Shared assistant store (per-assistant model on the worker)
+### Assistant store (per-assistant model on the worker)
 
 Each assistant carries its own model/provider. The Celery **worker** runs the
-agent, so it must read the same assistants the apiserver writes. Enable a shared
-RWX volume (EFS on AWS):
+agent, so it must read the same assistants the apiserver writes.
+
+**Recommended: store assistants in Postgres** (`values-aws.yaml` sets this):
+
+```
+--set app.assistantsStore.backend=postgres
+```
+
+Configs and skill/memory file bodies go into `stream_assistants` /
+`stream_assistant_files` (schema auto-created on first use); baked-in assistants
+are migrated on first startup. No EFS/RWX volume is required.
+
+**Alternative: shared RWX volume (EFS)** — keep `backend: filesystem` and enable a shared volume:
 
 1. Install the **EFS CSI driver** and create an EFS filesystem + a StorageClass
    named `efs-sc` (or point `storageClassName` at your own).

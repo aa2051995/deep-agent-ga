@@ -312,6 +312,25 @@ class AssistantStore:
                 logger.exception("assistants.seed_failed id=%s", config.assistant_id)
 
 
+def create_assistant_store() -> Any:
+    """Return the configured assistant store.
+
+    ``STREAM_BACKEND_ASSISTANT_STORE=postgres`` stores configs *and* skill/memory
+    file bodies in Postgres (shared by apiserver + worker, no RWX volume needed).
+    Any other value uses the folder-backed :class:`AssistantStore` (default).
+    Construction is side-effect free — the Postgres pool opens lazily on first use
+    — so this is safe to call at import time.
+    """
+    backend = os.getenv("STREAM_BACKEND_ASSISTANT_STORE", "filesystem").strip().lower()
+    if backend in {"postgres", "pg"}:
+        from .assistant_store_postgres import PostgresAssistantStore
+
+        logger.info("assistants.store.create backend=postgres")
+        return PostgresAssistantStore()
+    logger.info("assistants.store.create backend=filesystem")
+    return AssistantStore()
+
+
 VALID_PROVIDERS: tuple[str, ...] = ("google", "anthropic", "bedrock", "openai")
 
 

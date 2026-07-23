@@ -286,9 +286,9 @@ class ResearchDeepAgentRunner:
         # Per-assistant compiled agents keyed by assistant_id, each remembered
         # with the assistant.json mtime so an edited config rebuilds lazily.
         self._assistant_agents: dict[str, tuple[Any, float | None]] = {}
-        from .assistants import AssistantStore
+        from .assistants import create_assistant_store
 
-        self._assistant_store = AssistantStore()
+        self._assistant_store = create_assistant_store()
         try:
             self._assistant_store.ensure_seeded()
         except Exception:

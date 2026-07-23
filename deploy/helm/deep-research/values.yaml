@@ -49,7 +49,12 @@ app:
   # When disabled, only the read-only assistants baked into the image are used
   # (fine if you manage assistants via the repo and rebuild the image).
   assistantsStore:
-    mountPath: /data/assistants   # STREAM_BACKEND_ASSISTANTS_DIR when persistence is enabled
+    # "filesystem" (default) => assistants are folders on disk (baked-in, or on
+    # the shared RWX volume below). "postgres" => configs AND skill/memory file
+    # bodies live in Postgres (apiserver+worker already share it), so NO shared
+    # volume is needed — set persistence.enabled: false with this backend.
+    backend: filesystem           # filesystem | postgres  (STREAM_BACKEND_ASSISTANT_STORE)
+    mountPath: /data/assistants   # STREAM_BACKEND_ASSISTANTS_DIR (filesystem backend, persistence on)
     persistence:
       enabled: false
       existingClaim: ""           # bind a pre-provisioned RWX/EFS PVC; else the chart creates one

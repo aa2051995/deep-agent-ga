@@ -171,6 +171,10 @@ Shared env for apiserver + worker: non-secret from ConfigMap, secret from Secret
   value: {{ .Values.app.logLevel | quote }}
 - name: STREAM_BACKEND_LOG_COLOR
   value: "false"
+{{- if eq .Values.app.assistantsStore.backend "postgres" }}
+- name: STREAM_BACKEND_ASSISTANT_STORE
+  value: "postgres"
+{{- end }}
 {{- if .Values.app.assistantsStore.persistence.enabled }}
 - name: STREAM_BACKEND_ASSISTANTS_DIR
   value: {{ .Values.app.assistantsStore.mountPath | quote }}
