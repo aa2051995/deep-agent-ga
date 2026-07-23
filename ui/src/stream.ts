@@ -18,8 +18,38 @@ declare global {
   }
 }
 
-export const DEFAULT_API_URL =
-  (typeof window !== "undefined" && window.__API_URL__) || "http://localhost:2024";
+/**
+ * Resolve the configured API base to an ABSOLUTE URL.
+ *
+ * The LangGraph SDK builds requests with `new URL(`${apiUrl}${path}`)` (and
+ * `new URL(apiUrl)` for WebSockets), which throws on a relative value like
+ * "/api" because there's no base. Plain `fetch("/api/...")` tolerates a relative
+ * URL, so the non-SDK calls (threads/assistants) work while every SDK-driven
+ * action (run start, streaming) fails — the classic "UI loads but isn't
+ * connected" symptom behind a same-origin path proxy. Resolving "/api" against
+ * the current origin keeps it same-origin (nginx still proxies it) while giving
+ * the SDK a valid absolute URL.
+ */
+export function resolveApiUrl(raw: string | undefined | null, origin?: string): string {
+  const value = (raw ?? "").trim();
+  if (!value) {
+    return "http://localhost:2024";
+  }
+  if (/^https?:\/\//i.test(value)) {
+    return value.replace(/\/$/, "");
+  }
+  const base =
+    origin ?? (typeof window !== "undefined" ? window.location?.origin : undefined);
+  if (base) {
+    const path = value.startsWith("/") ? value : `/${value}`;
+    return `${base}${path}`.replace(/\/$/, "");
+  }
+  return value.replace(/\/$/, "");
+}
+
+export const DEFAULT_API_URL = resolveApiUrl(
+  (typeof window !== "undefined" && window.__API_URL__) || "http://localhost:2024",
+);
 export const ASSISTANT_ID = "deep-agent";
 
 export type DeepResearchState = {
