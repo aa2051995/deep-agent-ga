@@ -47,9 +47,29 @@ export function resolveApiUrl(raw: string | undefined | null, origin?: string): 
   return value.replace(/\/$/, "");
 }
 
-export const DEFAULT_API_URL = resolveApiUrl(
-  (typeof window !== "undefined" && window.__API_URL__) || "http://localhost:2024",
-);
+/**
+ * Pick the raw API base before it is resolved to an absolute URL:
+ *  1. `window.__API_URL__` (written by the container's /config.js) wins.
+ *  2. Otherwise, if the page is served from a real host (not local dev), assume
+ *     the same-origin nginx proxy at "/api" — so a missing/empty config.js still
+ *     reaches the backend instead of falling back to the dev server.
+ *  3. Local dev falls back to the LangGraph dev server.
+ */
+export function defaultApiBase(): string {
+  if (typeof window !== "undefined") {
+    if (window.__API_URL__) {
+      return window.__API_URL__;
+    }
+    const host = window.location?.hostname ?? "";
+    const isLocal = host === "localhost" || host === "127.0.0.1" || host === "::1";
+    if (host && !isLocal) {
+      return "/api";
+    }
+  }
+  return "http://localhost:2024";
+}
+
+export const DEFAULT_API_URL = resolveApiUrl(defaultApiBase());
 export const ASSISTANT_ID = "deep-agent";
 
 export type DeepResearchState = {

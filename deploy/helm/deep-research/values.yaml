@@ -183,9 +183,9 @@ apiserver:
   image:
     repository: deepresrepo
     tag: latest
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
 
-  replicas: 2
+  replicas: 1
   containerPort: 8123
 
   service:
@@ -202,7 +202,7 @@ apiserver:
 
   autoscaling:
     enabled: true
-    minReplicas: 2
+    minReplicas: 1
     maxReplicas: 10
     targetCPUUtilizationPercentage: 70
     targetMemoryUtilizationPercentage: 80
@@ -214,9 +214,9 @@ worker:
   image:
     repository: deepresrepo
     tag: latest
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
 
-  replicas: 2
+  replicas: 1
   # Celery pool + concurrency. Threads pool matches the project's guidance.
   pool: threads
   concurrency: 4
@@ -231,8 +231,8 @@ worker:
 
   autoscaling:
     enabled: true
-    minReplicas: 2
-    maxReplicas: 20
+    minReplicas: 1
+    maxReplicas: 6
     targetCPUUtilizationPercentage: 70
     targetMemoryUtilizationPercentage: 80
 
@@ -243,9 +243,9 @@ ui:
   image:
     repository: uirepo
     tag: latest
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
 
-  replicas: 2
+  replicas: 1
   containerPort: 8080
 
   # Browser-facing API base. "/api" keeps the browser same-origin (nginx proxies
@@ -266,7 +266,7 @@ ui:
 
   autoscaling:
     enabled: true
-    minReplicas: 2
+    minReplicas: 1
     maxReplicas: 6
     targetCPUUtilizationPercentage: 70
 

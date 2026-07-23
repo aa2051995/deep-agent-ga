@@ -4,6 +4,32 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Deep Research</title>
+    <!-- crypto.randomUUID() only exists in a secure context (HTTPS or localhost).
+         This app can be served over plain HTTP behind a load balancer, where both
+         our code AND the LangGraph SDK call it. Polyfill it (via getRandomValues,
+         which IS available over HTTP) before any module runs. -->
+    <script>
+      (function () {
+        try {
+          var c = window.crypto;
+          if (c && typeof c.randomUUID !== "function" && typeof c.getRandomValues === "function") {
+            var uuid = function () {
+              var b = c.getRandomValues(new Uint8Array(16));
+              b[6] = (b[6] & 0x0f) | 0x40;
+              b[8] = (b[8] & 0x3f) | 0x80;
+              var s = [];
+              for (var i = 0; i < 16; i++) s.push((b[i] + 0x100).toString(16).slice(1));
+              return (
+                s[0]+s[1]+s[2]+s[3]+"-"+s[4]+s[5]+"-"+s[6]+s[7]+"-"+s[8]+s[9]+"-"+
+                s[10]+s[11]+s[12]+s[13]+s[14]+s[15]
+              );
+            };
+            try { c.randomUUID = uuid; }
+            catch (e) { Object.defineProperty(c, "randomUUID", { value: uuid, configurable: true }); }
+          }
+        } catch (e) { /* ignore */ }
+      })();
+    </script>
     <!-- Runtime configuration injected by the container entrypoint (Kubernetes /
          Helm). Generated fresh on every pod start; ships empty in local dev. -->
     <script src="/config.js"></script>
