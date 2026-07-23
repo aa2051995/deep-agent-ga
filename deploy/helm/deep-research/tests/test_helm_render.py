@@ -127,6 +127,30 @@ def test_rabbitmq_stream_advertised_host_is_service_dns(manifests):
     assert "rabbitmq_stream" in cfg["data"]["enabled_plugins"]
 
 
+def test_global_registry_only_prefixes_app_images():
+    """global.imageRegistry must apply to apiserver/worker/ui (which live in the
+    user's registry) but NOT to postgres/rabbitmq (pulled from Docker Hub) — else
+    it would redirect those to a registry that doesn't host them.
+    """
+    manifests = _render(
+        "--set", "global.imageRegistry=553138586148.dkr.ecr.us-east-1.amazonaws.com",
+        "--set", "apiserver.image.repository=deepresrepo",
+        "--set", "worker.image.repository=deepresrepo",
+        "--set", "ui.image.repository=uirepo",
+    )
+
+    def image_of(kind, component):
+        return _by(manifests, kind, component)["spec"]["template"]["spec"]["containers"][0]["image"]
+
+    reg = "553138586148.dkr.ecr.us-east-1.amazonaws.com"
+    assert image_of("Deployment", "apiserver") == f"{reg}/deepresrepo:latest"
+    assert image_of("Deployment", "worker") == f"{reg}/deepresrepo:latest"
+    assert image_of("Deployment", "ui") == f"{reg}/uirepo:latest"
+    # Third-party images stay on Docker Hub (no registry prefix).
+    assert image_of("StatefulSet", "postgres") == "postgres:16-alpine"
+    assert image_of("StatefulSet", "rabbitmq") == "rabbitmq:3.13-management"
+
+
 def test_external_postgres_replaces_statefulset():
     manifests = _render(
         "--set", "postgres.external.enabled=true",

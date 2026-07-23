@@ -29,7 +29,7 @@ spec:
       {{- end }}
       containers:
         - name: worker
-          image: {{ include "deep-research.image" (dict "root" $ "image" .Values.worker.image) }}
+          image: {{ include "deep-research.appImage" (dict "root" $ "image" .Values.worker.image) }}
           imagePullPolicy: {{ .Values.worker.image.pullPolicy }}
           command:
             - celery

@@ -6,9 +6,11 @@
 # Global
 # -----------------------------------------------------------------------------
 global:
-  # Prefixed to in-cluster Service DNS names and image repositories.
-  imageRegistry: ""          # e.g. 553138586148.dkr.ecr.eu-north-1.amazonaws.com
-  imagePullSecrets: []       # e.g. [{ name: ecr-creds }]  (not needed with EKS IRSA/ECR node role)
+  # Registry prefix for the APP images only (apiserver / worker / ui) — e.g. your
+  # ECR. It is NOT applied to postgres/rabbitmq (those pull from Docker Hub; set
+  # their own `image.registry` if you mirror them).
+  imageRegistry: ""          # e.g. 553138586148.dkr.ecr.us-east-1.amazonaws.com
+  imagePullSecrets: []       # e.g. [{ name: ecr-creds }]  (not needed when the node role has ECR read)
 
 nameOverride: ""
 fullnameOverride: ""
@@ -84,6 +86,7 @@ postgres:
     connectionUrl: ""        # postgres://user:pass@host:5432/db?sslmode=require
 
   image:
+    registry: ""             # blank => Docker Hub. Set to mirror (e.g. an ECR pull-through cache).
     repository: postgres
     tag: "16-alpine"
     pullPolicy: IfNotPresent
@@ -121,6 +124,7 @@ rabbitmq:
     streamUrl: ""            # rabbitmq-stream://user:pass@host:5552/
 
   image:
+    registry: ""             # blank => Docker Hub. Set to mirror (e.g. an ECR pull-through cache).
     repository: rabbitmq
     tag: "3.13-management"
     pullPolicy: IfNotPresent
@@ -156,7 +160,7 @@ rabbitmq:
 # -----------------------------------------------------------------------------
 apiserver:
   image:
-    repository: deep-research-backend
+    repository: deepresrepo
     tag: latest
     pullPolicy: IfNotPresent
 
@@ -187,7 +191,7 @@ apiserver:
 # -----------------------------------------------------------------------------
 worker:
   image:
-    repository: deep-research-backend
+    repository: deepresrepo
     tag: latest
     pullPolicy: IfNotPresent
 
@@ -216,7 +220,7 @@ worker:
 # -----------------------------------------------------------------------------
 ui:
   image:
-    repository: deep-research-ui
+    repository: uirepo
     tag: latest
     pullPolicy: IfNotPresent
 

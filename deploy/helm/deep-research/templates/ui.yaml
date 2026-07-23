@@ -26,7 +26,7 @@ spec:
       {{- end }}
       containers:
         - name: ui
-          image: {{ include "deep-research.image" (dict "root" $ "image" .Values.ui.image) }}
+          image: {{ include "deep-research.appImage" (dict "root" $ "image" .Values.ui.image) }}
           imagePullPolicy: {{ .Values.ui.image.pullPolicy }}
           ports:
             - name: http

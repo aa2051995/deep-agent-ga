@@ -10,8 +10,9 @@
 #   - AWS Load Balancer Controller (for the ALB ingress)
 
 global:
-  # Push images here first (see deploy/README.md for build/push commands).
-  imageRegistry: 553138586148.dkr.ecr.eu-north-1.amazonaws.com
+  # App-image registry (apiserver/worker/ui only). Push images here first
+  # (see deploy/README.md). postgres/rabbitmq still pull from Docker Hub.
+  imageRegistry: 553138586148.dkr.ecr.us-east-1.amazonaws.com
 
 app:
   research:
@@ -48,7 +49,7 @@ rabbitmq:
 
 apiserver:
   image:
-    repository: deep-research-backend
+    repository: deepresrepo
     tag: latest
   autoscaling:
     enabled: true
@@ -57,7 +58,7 @@ apiserver:
 
 worker:
   image:
-    repository: deep-research-backend
+    repository: deepresrepo
     tag: latest
   autoscaling:
     enabled: true
@@ -66,7 +67,7 @@ worker:
 
 ui:
   image:
-    repository: deep-research-ui
+    repository: uirepo
     tag: latest
   apiUrl: "/api"
   autoscaling:

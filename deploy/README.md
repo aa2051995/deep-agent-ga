@@ -62,18 +62,28 @@ clients (rstream) cannot reach the stream leader from other pods.
 ## 1. Build & push images
 
 ```bash
-export REGISTRY=553138586148.dkr.ecr.eu-north-1.amazonaws.com
-export REGION=eu-north-1
+export REGISTRY=553138586148.dkr.ecr.us-east-1.amazonaws.com
+export REGION=us-east-1
 aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $REGISTRY
 
+# Create the repos once (skip if they already exist)
+aws ecr create-repository --repository-name deepresrepo --region $REGION || true
+aws ecr create-repository --repository-name uirepo --region $REGION || true
+
 # Backend (apiserver + worker) — build context is stream-backend/
-docker build -t $REGISTRY/deep-research-backend:latest stream-backend
-docker push $REGISTRY/deep-research-backend:latest
+docker build -t $REGISTRY/deepresrepo:latest stream-backend
+docker push $REGISTRY/deepresrepo:latest
 
 # UI — build context is ui/
-docker build -t $REGISTRY/deep-research-ui:latest ui
-docker push $REGISTRY/deep-research-ui:latest
+docker build -t $REGISTRY/uirepo:latest ui
+docker push $REGISTRY/uirepo:latest
 ```
+
+> Only the **app** images (apiserver/worker/ui) go to your ECR. postgres and
+> rabbitmq pull from Docker Hub — `global.imageRegistry` does not touch them.
+> EKS nodes need ECR pull permission (the node IAM role's
+> `AmazonEC2ContainerRegistryReadOnly`), so no `imagePullSecrets` are required
+> for same-account ECR.
 
 ## 2. Install
 

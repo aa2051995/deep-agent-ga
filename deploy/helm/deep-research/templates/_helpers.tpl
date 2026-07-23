@@ -42,9 +42,23 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if .Values.secrets.existingSecret -}}{{ .Values.secrets.existingSecret }}{{- else -}}{{ printf "%s-secrets" (include "deep-research.fullname" .) }}{{- end -}}
 {{- end -}}
 
-{{/* Fully-qualified image reference with optional global registry prefix */}}
+{{/* App image (apiserver / worker / ui): lives in your registry, so it gets the
+     global.imageRegistry prefix (e.g. your ECR). A per-image `registry` still wins. */}}
+{{- define "deep-research.appImage" -}}
+{{- $registry := .image.registry | default .root.Values.global.imageRegistry -}}
+{{- if $registry -}}
+{{- printf "%s/%s:%s" $registry .image.repository .image.tag -}}
+{{- else -}}
+{{- printf "%s:%s" .image.repository .image.tag -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Third-party image (postgres / rabbitmq): pulled from Docker Hub by default,
+     NOT from your app registry. Set the per-image `registry` to mirror it into
+     your own registry (e.g. an ECR pull-through cache). global.imageRegistry is
+     intentionally ignored here so it can't redirect these to your ECR. */}}
 {{- define "deep-research.image" -}}
-{{- $registry := .root.Values.global.imageRegistry -}}
+{{- $registry := .image.registry | default "" -}}
 {{- if $registry -}}
 {{- printf "%s/%s:%s" $registry .image.repository .image.tag -}}
 {{- else -}}
