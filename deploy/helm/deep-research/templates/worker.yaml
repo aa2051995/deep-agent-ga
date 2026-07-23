@@ -27,6 +27,10 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if .Values.app.assistantsStore.persistence.enabled }}
+      initContainers:
+        {{- include "deep-research.assistantsInitContainer" (dict "root" $ "image" .Values.worker.image) | nindent 8 }}
+      {{- end }}
       containers:
         - name: worker
           image: {{ include "deep-research.appImage" (dict "root" $ "image" .Values.worker.image) }}
@@ -53,6 +57,14 @@ spec:
             failureThreshold: 3
           resources:
             {{- toYaml .Values.worker.resources | nindent 12 }}
+          {{- if .Values.app.assistantsStore.persistence.enabled }}
+          volumeMounts:
+            {{- include "deep-research.assistantsVolumeMount" . | nindent 12 }}
+          {{- end }}
+      {{- if .Values.app.assistantsStore.persistence.enabled }}
+      volumes:
+        {{- include "deep-research.assistantsVolume" . | nindent 8 }}
+      {{- end }}
 {{- if .Values.worker.autoscaling.enabled }}
 ---
 apiVersion: autoscaling/v2

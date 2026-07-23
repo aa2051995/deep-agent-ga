@@ -1,0 +1,16 @@
+{{- if and .Values.app.assistantsStore.persistence.enabled (not .Values.app.assistantsStore.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "deep-research.assistantsClaimName" . }}
+  labels:
+    {{- include "deep-research.labels" . | nindent 4 }}
+    app.kubernetes.io/component: assistants-store
+spec:
+  accessModes:
+    {{- toYaml .Values.app.assistantsStore.persistence.accessModes | nindent 4 }}
+  storageClassName: {{ .Values.app.assistantsStore.persistence.storageClassName | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.app.assistantsStore.persistence.size }}
+{{- end }}

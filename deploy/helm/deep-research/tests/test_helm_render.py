@@ -151,6 +151,42 @@ def test_global_registry_only_prefixes_app_images():
     assert image_of("StatefulSet", "rabbitmq") == "rabbitmq:3.13-management"
 
 
+def test_shared_assistant_store_wires_apiserver_and_worker():
+    """When app.assistantsStore.persistence is enabled, the apiserver and worker
+    must share the store: a PVC, a seed initContainer, a volume mount, and the
+    STREAM_BACKEND_ASSISTANTS_DIR env pointing at the mount. The UI is untouched.
+    """
+    manifests = _render("--set", "app.assistantsStore.persistence.enabled=true")
+
+    pvcs = [m for m in manifests if m.get("kind") == "PersistentVolumeClaim"]
+    assert len(pvcs) == 1
+    assert "ReadWriteMany" in pvcs[0]["spec"]["accessModes"]
+
+    for component in ("apiserver", "worker"):
+        dep = _by(manifests, "Deployment", component)
+        spec = dep["spec"]["template"]["spec"]
+        assert [i["name"] for i in spec["initContainers"]] == ["seed-assistants"]
+        assert spec["volumes"][0]["persistentVolumeClaim"]["claimName"].endswith("-assistants")
+        mount = spec["containers"][0]["volumeMounts"][0]
+        assert mount["mountPath"] == "/data/assistants"
+        env = _env_map(dep)
+        assert env["STREAM_BACKEND_ASSISTANTS_DIR"]["value"] == "/data/assistants"
+
+    ui = _by(manifests, "Deployment", "ui")["spec"]["template"]["spec"]
+    assert "volumes" not in ui and "initContainers" not in ui
+
+
+def test_assistant_store_disabled_by_default(manifests):
+    """Default (disabled): no PVC, no init container, no assistants env — so the
+    baked-in read-only assistants are used and the chart works without EFS.
+    """
+    assert not [m for m in manifests if m.get("kind") == "PersistentVolumeClaim"]
+    for component in ("apiserver", "worker"):
+        spec = _by(manifests, "Deployment", component)["spec"]["template"]["spec"]
+        assert "initContainers" not in spec
+        assert "STREAM_BACKEND_ASSISTANTS_DIR" not in _env_map(_by(manifests, "Deployment", component))
+
+
 def test_external_postgres_replaces_statefulset():
     manifests = _render(
         "--set", "postgres.external.enabled=true",

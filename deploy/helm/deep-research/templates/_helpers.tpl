@@ -38,6 +38,14 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 {{- end -}}
 
+{{- define "deep-research.assistantsClaimName" -}}
+{{- if .Values.app.assistantsStore.persistence.existingClaim -}}
+{{- .Values.app.assistantsStore.persistence.existingClaim -}}
+{{- else -}}
+{{- printf "%s-assistants" (include "deep-research.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "deep-research.secretName" -}}
 {{- if .Values.secrets.existingSecret -}}{{ .Values.secrets.existingSecret }}{{- else -}}{{ printf "%s-secrets" (include "deep-research.fullname" .) }}{{- end -}}
 {{- end -}}
@@ -64,6 +72,51 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- else -}}
 {{- printf "%s:%s" .image.repository .image.tag -}}
 {{- end -}}
+{{- end -}}
+
+{{/* ---------------------------------------------------------------------------
+Shared assistant store (apiserver + worker). Emits nothing when persistence is
+disabled, so the parent pod spec stays valid. The init container seeds the
+image's baked-in assistants into the shared volume the first time only, so
+existing/edited assistants are never overwritten on restart.
+--------------------------------------------------------------------------- */}}
+{{- define "deep-research.assistantsInitContainer" -}}
+{{- if .root.Values.app.assistantsStore.persistence.enabled }}
+- name: seed-assistants
+  image: {{ include "deep-research.appImage" (dict "root" .root "image" .image) }}
+  imagePullPolicy: {{ .image.pullPolicy }}
+  command:
+    - sh
+    - -c
+    - |
+      set -e
+      DEST="{{ .root.Values.app.assistantsStore.mountPath }}"
+      mkdir -p "$DEST"
+      if [ -z "$(ls -A "$DEST" 2>/dev/null)" ]; then
+        echo "seeding baked-in assistants into $DEST"
+        cp -a /app/assistants/. "$DEST"/ 2>/dev/null || true
+      else
+        echo "assistants store already populated; leaving as-is"
+      fi
+  volumeMounts:
+    - name: assistants
+      mountPath: {{ .root.Values.app.assistantsStore.mountPath }}
+{{- end }}
+{{- end -}}
+
+{{- define "deep-research.assistantsVolumeMount" -}}
+{{- if .Values.app.assistantsStore.persistence.enabled }}
+- name: assistants
+  mountPath: {{ .Values.app.assistantsStore.mountPath }}
+{{- end }}
+{{- end -}}
+
+{{- define "deep-research.assistantsVolume" -}}
+{{- if .Values.app.assistantsStore.persistence.enabled }}
+- name: assistants
+  persistentVolumeClaim:
+    claimName: {{ include "deep-research.assistantsClaimName" . }}
+{{- end }}
 {{- end -}}
 
 {{/* ---------------------------------------------------------------------------
@@ -118,6 +171,10 @@ Shared env for apiserver + worker: non-secret from ConfigMap, secret from Secret
   value: {{ .Values.app.logLevel | quote }}
 - name: STREAM_BACKEND_LOG_COLOR
   value: "false"
+{{- if .Values.app.assistantsStore.persistence.enabled }}
+- name: STREAM_BACKEND_ASSISTANTS_DIR
+  value: {{ .Values.app.assistantsStore.mountPath | quote }}
+{{- end }}
 - name: RESEARCH_AGENT_PROVIDER
   value: {{ .Values.app.research.provider | quote }}
 - name: RESEARCH_AGENT_MODEL

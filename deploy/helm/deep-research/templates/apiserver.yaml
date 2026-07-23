@@ -27,6 +27,10 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if .Values.app.assistantsStore.persistence.enabled }}
+      initContainers:
+        {{- include "deep-research.assistantsInitContainer" (dict "root" $ "image" .Values.apiserver.image) | nindent 8 }}
+      {{- end }}
       containers:
         - name: apiserver
           image: {{ include "deep-research.appImage" (dict "root" $ "image" .Values.apiserver.image) }}
@@ -51,6 +55,14 @@ spec:
             periodSeconds: 20
           resources:
             {{- toYaml .Values.apiserver.resources | nindent 12 }}
+          {{- if .Values.app.assistantsStore.persistence.enabled }}
+          volumeMounts:
+            {{- include "deep-research.assistantsVolumeMount" . | nindent 12 }}
+          {{- end }}
+      {{- if .Values.app.assistantsStore.persistence.enabled }}
+      volumes:
+        {{- include "deep-research.assistantsVolume" . | nindent 8 }}
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service

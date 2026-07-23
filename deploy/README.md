@@ -58,6 +58,8 @@ clients (rstream) cannot reach the stream leader from other pods.
 - **metrics-server** (HPAs need it).
 - **AWS Load Balancer Controller** (for the `alb` Ingress).
 - An ECR repo (or any registry) for the two images.
+- *Optional:* **EFS CSI driver** + an RWX StorageClass (e.g. `efs-sc`) if you
+  enable the shared assistant store (see below).
 
 ## 1. Build & push images
 
@@ -122,8 +124,27 @@ All knobs live in [`helm/deep-research/values.yaml`](helm/deep-research/values.y
 - `postgres.external.enabled` / `connectionUrl` — use RDS instead of the in-cluster DB.
 - `rabbitmq.external.enabled` / `amqpUrl` / `streamUrl` — use an external broker.
 - `apiserver.autoscaling.*`, `worker.autoscaling.*`, `ui.autoscaling.*` — HPA bounds.
-- `app.research.provider` / `app.research.model` — agent model.
+- `app.research.provider` / `app.research.model` — **fallback** agent model only;
+  real runs use each assistant's own model/provider from its stored config.
+- `app.assistantsStore.persistence.enabled` — share the assistant store across
+  apiserver + worker over an RWX/EFS volume so UI-created/edited assistants reach
+  the worker and survive restarts (see below). Off by default (baked-in, read-only).
 - `ui.apiUrl` — browser API base (`/api` = same-origin via nginx).
+
+### Shared assistant store (per-assistant model on the worker)
+
+Each assistant carries its own model/provider. The Celery **worker** runs the
+agent, so it must read the same assistants the apiserver writes. Enable a shared
+RWX volume (EFS on AWS):
+
+1. Install the **EFS CSI driver** and create an EFS filesystem + a StorageClass
+   named `efs-sc` (or point `storageClassName` at your own).
+2. `--set app.assistantsStore.persistence.enabled=true` (already set in
+   `values-aws.yaml`). An init container seeds the image's baked-in assistants
+   into the volume the first time; existing assistants are never overwritten.
+
+Left disabled, only the assistants baked into the image are used (edit them by
+rebuilding), and runtime UI edits are per-pod and lost on restart.
 
 ## Tests
 

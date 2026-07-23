@@ -41,6 +41,22 @@ app:
 
   logLevel: INFO             # STREAM_BACKEND_LOG_LEVEL
 
+  # Assistant store. Each assistant carries its own model/provider (used by runs
+  # in preference to app.research.* above, which is only a fallback for unknown
+  # assistants). Assistants are stored as files; for the worker to honor
+  # UI-created/edited assistants — and for edits to survive restarts — the
+  # apiserver and worker must SHARE this directory over an RWX volume (EFS on AWS).
+  # When disabled, only the read-only assistants baked into the image are used
+  # (fine if you manage assistants via the repo and rebuild the image).
+  assistantsStore:
+    mountPath: /data/assistants   # STREAM_BACKEND_ASSISTANTS_DIR when persistence is enabled
+    persistence:
+      enabled: false
+      existingClaim: ""           # bind a pre-provisioned RWX/EFS PVC; else the chart creates one
+      storageClassName: efs-sc    # an RWX StorageClass (AWS EFS CSI)
+      accessModes: ["ReadWriteMany"]
+      size: 1Gi
+
   # Extra free-form env applied to apiserver + worker (non-secret).
   extraEnv: {}
     # SOME_FLAG: "true"

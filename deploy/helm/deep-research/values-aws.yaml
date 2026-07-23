@@ -15,6 +15,7 @@ global:
   imageRegistry: 553138586148.dkr.ecr.us-east-1.amazonaws.com
 
 app:
+  # Fallback model only — real runs use each assistant's own model/provider.
   research:
     provider: bedrock
     model: moonshotai.kimi-k2.5
@@ -22,6 +23,15 @@ app:
     region: eu-north-1
     # Prefer IRSA over static keys — leave useProfile false and attach a role below.
     useProfile: false
+  # Share the assistant store (per-assistant model/provider) across apiserver +
+  # worker so UI-created/edited assistants reach the worker and survive restarts.
+  # Requires the AWS EFS CSI driver and an RWX StorageClass (below).
+  assistantsStore:
+    persistence:
+      enabled: true
+      storageClassName: efs-sc     # create an EFS-backed StorageClass named efs-sc
+      # existingClaim: ""          # or bind a pre-provisioned EFS PVC instead
+      size: 1Gi
 
 serviceAccount:
   create: true
