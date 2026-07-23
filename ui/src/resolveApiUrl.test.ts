@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveApiUrl } from "./stream";
+import { resolveApiUrl } from "./apiUrl";
 
 const ORIGIN = "http://k8s-deeprese.us-east-1.elb.amazonaws.com";
 

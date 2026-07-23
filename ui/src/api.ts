@@ -8,8 +8,9 @@ import type {
   TodoItem,
 } from "./types";
 import { logger } from "./logger";
-
-export const DEFAULT_API_URL = "http://localhost:2024";
+// Shared single source of truth (was a hardcoded http://localhost:2024, which
+// made assistant calls bypass the resolved same-origin /api base).
+export { DEFAULT_API_URL } from "./apiUrl";
 export const ASSISTANT_ID = "deep-agent";
 
 let commandId = 1;

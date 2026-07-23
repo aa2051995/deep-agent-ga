@@ -5,6 +5,7 @@ import logging
 import os
 import signal
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 from weakref import WeakSet
@@ -70,15 +71,26 @@ class WorkerShutdownManager:
         """Setup signal handlers for graceful shutdown."""
         if self._setup_complete:
             return
-            
+
+        # Signal handlers can only be installed from the MAIN thread of the main
+        # interpreter. Under Celery's thread/prefork pools the task body runs in
+        # a worker thread, where loop.add_signal_handler() raises
+        # RuntimeError('set_wakeup_fd only works in main thread ...'). Skip
+        # gracefully there — cooperative cancellation (cancel_requested) still
+        # handles shutdown; only the extra signal-driven path is unavailable.
+        if threading.current_thread() is not threading.main_thread():
+            logger.info("worker.shutdown.signals_skipped reason=not_main_thread")
+            self._setup_complete = True
+            return
+
         loop = asyncio.get_event_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
             try:
                 loop.add_signal_handler(sig, lambda: asyncio.create_task(self._handle_shutdown()))
-            except NotImplementedError:
+            except (NotImplementedError, RuntimeError, ValueError):
                 logger.warning("worker.shutdown.signals_not_supported platform=%s", os.name)
                 break
-        
+
         self._setup_complete = True
         logger.info("worker.shutdown.handlers_configured")
 
