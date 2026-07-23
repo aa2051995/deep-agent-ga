@@ -1,0 +1,36 @@
+{{- if .Values.ingress.enabled }}
+{{- $ui := include "deep-research.ui.fullname" . -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "deep-research.fullname" . }}
+  labels:
+    {{- include "deep-research.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName | quote }}
+  {{- end }}
+  rules:
+    - {{ if .Values.ingress.host }}host: {{ .Values.ingress.host | quote }}
+      {{ end }}http:
+        paths:
+          # All traffic hits the UI; nginx there serves the SPA and reverse-
+          # proxies /api/* to the apiserver (keeping the browser same-origin).
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $ui }}
+                port:
+                  number: {{ .Values.ui.service.port }}
+{{- end }}

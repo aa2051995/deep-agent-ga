@@ -1,0 +1,56 @@
+# Rendered by nginx's built-in envsubst at container start (20-envsubst-on-templates.sh).
+# Only ${APISERVER_UPSTREAM} is substituted; nginx runtime vars like $host are left intact.
+
+# WebSocket upgrade helper: "upgrade" when the client asks, "close" otherwise.
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 8080;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Never cache the runtime config or the entrypoint HTML.
+    location = /config.js {
+        add_header Cache-Control "no-store";
+    }
+    location = /index.html {
+        add_header Cache-Control "no-store";
+    }
+
+    # SPA: fall back to index.html for client-side routes.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Reverse-proxy the backend so the browser stays same-origin (no CORS).
+    # /api/threads/... -> ${APISERVER_UPSTREAM}/threads/...
+    location /api/ {
+        proxy_pass ${APISERVER_UPSTREAM}/;
+        proxy_http_version 1.1;
+
+        # WebSocket upgrade (protocol events stream).
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Server-Sent Events: disable buffering and let streams stay open.
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        chunked_transfer_encoding on;
+    }
+
+    location = /healthz {
+        access_log off;
+        return 200 "ok\n";
+    }
+}

@@ -213,3 +213,17 @@ Persistence of agent state happens twice: the backend writes its own `ThreadStat
 - **Duplication risk**: `research_agent/` and `AutoResearchRunner` exist in both `app/` and `worker/`; the two copies must stay in sync.
 - **Test coverage** targets the moving parts: run lifecycle, reschedule logic, Celery scheduler, streaming helpers/manager, worker lifecycle, and integration lifecycle (`stream-backend/tests/`).
 - **Security**: real credentials are hardcoded in `main.py:122-137` and CORS is wide open — flagged for awareness.
+
+---
+
+## Deployment (Kubernetes / EKS)
+
+A Helm chart (`deploy/helm/deep-research`) deploys the full distributed stack to
+Kubernetes: Postgres and RabbitMQ (AMQP + Streams) as StatefulSets, and the
+apiserver, Celery worker, and React UI as autoscaled Deployments. The apiserver
+and worker share one backend image (`stream-backend/Dockerfile`); the UI image
+(`ui/Dockerfile`) is nginx that serves the SPA and reverse-proxies `/api/*` to the
+apiserver (same-origin). All inter-service connection strings are generated from
+in-cluster Service DNS and injected as the same env vars `set_env()` uses. See
+[`docs/architecture/deployment-kubernetes.md`](architecture/deployment-kubernetes.md)
+and [`deploy/README.md`](../deploy/README.md).

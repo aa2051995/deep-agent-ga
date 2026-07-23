@@ -1,0 +1,133 @@
+{{- if and .Values.rabbitmq.enabled (not .Values.rabbitmq.external.enabled) }}
+{{- $rmq := include "deep-research.rabbitmq.fullname" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $rmq }}-config
+  labels:
+    {{- include "deep-research.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rabbitmq
+data:
+  enabled_plugins: |
+    [rabbitmq_management,rabbitmq_stream,rabbitmq_stream_management].
+  rabbitmq.conf: |
+    # Listeners
+    listeners.tcp.default = {{ .Values.rabbitmq.ports.amqp }}
+    stream.listeners.tcp.default = {{ .Values.rabbitmq.ports.stream }}
+    management.tcp.port = {{ .Values.rabbitmq.ports.management }}
+    # The Streams protocol hands clients back an advertised host after the
+    # handshake; in-cluster it MUST be the Service DNS name or rstream clients
+    # (apiserver/worker) fail to connect to the stream leader.
+    stream.advertised_host = {{ $rmq }}
+    stream.advertised_port = {{ .Values.rabbitmq.ports.stream }}
+    loopback_users = none
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $rmq }}
+  labels:
+    {{- include "deep-research.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rabbitmq
+spec:
+  clusterIP: None
+  selector:
+    {{- include "deep-research.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rabbitmq
+  ports:
+    - name: amqp
+      port: {{ .Values.rabbitmq.ports.amqp }}
+      targetPort: amqp
+    - name: stream
+      port: {{ .Values.rabbitmq.ports.stream }}
+      targetPort: stream
+    - name: management
+      port: {{ .Values.rabbitmq.ports.management }}
+      targetPort: management
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $rmq }}
+  labels:
+    {{- include "deep-research.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rabbitmq
+spec:
+  serviceName: {{ $rmq }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "deep-research.labels" . | nindent 6 }}
+      app.kubernetes.io/component: rabbitmq
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ toYaml .Values.rabbitmq | sha256sum }}
+      labels:
+        {{- include "deep-research.labels" . | nindent 8 }}
+        app.kubernetes.io/component: rabbitmq
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: rabbitmq
+          image: {{ include "deep-research.image" (dict "root" $ "image" .Values.rabbitmq.image) }}
+          imagePullPolicy: {{ .Values.rabbitmq.image.pullPolicy }}
+          ports:
+            - name: amqp
+              containerPort: {{ .Values.rabbitmq.ports.amqp }}
+            - name: stream
+              containerPort: {{ .Values.rabbitmq.ports.stream }}
+            - name: management
+              containerPort: {{ .Values.rabbitmq.ports.management }}
+          env:
+            - name: RABBITMQ_DEFAULT_USER
+              value: {{ .Values.rabbitmq.auth.username | quote }}
+            - name: RABBITMQ_DEFAULT_PASS
+              value: {{ .Values.rabbitmq.auth.password | quote }}
+          readinessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "ping"]
+            initialDelaySeconds: 40
+            periodSeconds: 30
+            timeoutSeconds: 15
+          resources:
+            {{- toYaml .Values.rabbitmq.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/rabbitmq/enabled_plugins
+              subPath: enabled_plugins
+            - name: config
+              mountPath: /etc/rabbitmq/conf.d/10-deep-research.conf
+              subPath: rabbitmq.conf
+            - name: data
+              mountPath: /var/lib/rabbitmq
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $rmq }}-config
+      {{- if not .Values.rabbitmq.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+      {{- end }}
+  {{- if .Values.rabbitmq.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          {{- toYaml .Values.rabbitmq.persistence.accessModes | nindent 10 }}
+        storageClassName: {{ .Values.rabbitmq.persistence.storageClassName | quote }}
+        resources:
+          requests:
+            storage: {{ .Values.rabbitmq.persistence.size }}
+  {{- end }}
+{{- end }}

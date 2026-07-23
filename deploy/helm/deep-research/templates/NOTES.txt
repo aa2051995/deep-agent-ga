@@ -1,0 +1,25 @@
+Deep Research has been deployed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+Components:
+  - postgres  : {{ if .Values.postgres.external.enabled }}external (RDS){{ else if .Values.postgres.enabled }}StatefulSet {{ include "deep-research.postgres.fullname" . }}{{ else }}disabled{{ end }}
+  - rabbitmq  : {{ if .Values.rabbitmq.external.enabled }}external{{ else if .Values.rabbitmq.enabled }}StatefulSet {{ include "deep-research.rabbitmq.fullname" . }} (amqp {{ .Values.rabbitmq.ports.amqp }}, stream {{ .Values.rabbitmq.ports.stream }}){{ else }}disabled{{ end }}
+  - apiserver : Deployment {{ include "deep-research.apiserver.fullname" . }} (autoscaling {{ .Values.apiserver.autoscaling.enabled }})
+  - worker    : Deployment {{ include "deep-research.worker.fullname" . }} (autoscaling {{ .Values.worker.autoscaling.enabled }})
+  - ui        : Deployment {{ include "deep-research.ui.fullname" . }} (autoscaling {{ .Values.ui.autoscaling.enabled }})
+
+Reach the app:
+{{- if .Values.ingress.enabled }}
+  Ingress "{{ include "deep-research.fullname" . }}" is enabled.
+  {{- if .Values.ingress.host }}
+  Open: http{{ if .Values.ingress.tls.enabled }}s{{ end }}://{{ .Values.ingress.host }}/
+  {{- else }}
+  Get the load balancer address:
+    kubectl get ingress {{ include "deep-research.fullname" . }} -n {{ .Release.Namespace }} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+  {{- end }}
+{{- else }}
+  Ingress is disabled. Port-forward the UI:
+    kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "deep-research.ui.fullname" . }} 8080:{{ .Values.ui.service.port }}
+  Then open http://localhost:8080/
+{{- end }}
+
+The browser talks to the API at "{{ .Values.ui.apiUrl }}" (proxied by the UI's nginx to the apiserver).

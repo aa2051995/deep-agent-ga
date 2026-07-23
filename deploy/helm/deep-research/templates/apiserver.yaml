@@ -1,0 +1,102 @@
+{{- $api := include "deep-research.apiserver.fullname" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $api }}
+  labels:
+    {{- include "deep-research.labels" . | nindent 4 }}
+    app.kubernetes.io/component: apiserver
+spec:
+  {{- if not .Values.apiserver.autoscaling.enabled }}
+  replicas: {{ .Values.apiserver.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "deep-research.labels" . | nindent 6 }}
+      app.kubernetes.io/component: apiserver
+  template:
+    metadata:
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        {{- include "deep-research.labels" . | nindent 8 }}
+        app.kubernetes.io/component: apiserver
+    spec:
+      serviceAccountName: {{ include "deep-research.serviceAccountName" . }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: apiserver
+          image: {{ include "deep-research.image" (dict "root" $ "image" .Values.apiserver.image) }}
+          imagePullPolicy: {{ .Values.apiserver.image.pullPolicy }}
+          command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "{{ .Values.apiserver.containerPort }}"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.apiserver.containerPort }}
+          env:
+            {{- include "deep-research.backendEnv" . | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.apiserver.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $api }}
+  labels:
+    {{- include "deep-research.labels" . | nindent 4 }}
+    app.kubernetes.io/component: apiserver
+spec:
+  type: {{ .Values.apiserver.service.type }}
+  selector:
+    {{- include "deep-research.labels" . | nindent 4 }}
+    app.kubernetes.io/component: apiserver
+  ports:
+    - name: http
+      port: {{ .Values.apiserver.service.port }}
+      targetPort: http
+{{- if .Values.apiserver.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $api }}
+  labels:
+    {{- include "deep-research.labels" . | nindent 4 }}
+    app.kubernetes.io/component: apiserver
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $api }}
+  minReplicas: {{ .Values.apiserver.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.apiserver.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.apiserver.autoscaling.targetCPUUtilizationPercentage }}
+    {{- with .Values.apiserver.autoscaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ . }}
+    {{- end }}
+{{- end }}

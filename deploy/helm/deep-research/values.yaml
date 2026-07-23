@@ -1,0 +1,263 @@
+# Default values for the deep-research chart.
+# Every service (postgres, rabbitmq, apiserver, worker, ui) is configured here.
+# For an AWS/EKS-tuned starting point see values-aws.yaml.
+
+# -----------------------------------------------------------------------------
+# Global
+# -----------------------------------------------------------------------------
+global:
+  # Prefixed to in-cluster Service DNS names and image repositories.
+  imageRegistry: ""          # e.g. 553138586148.dkr.ecr.eu-north-1.amazonaws.com
+  imagePullSecrets: []       # e.g. [{ name: ecr-creds }]  (not needed with EKS IRSA/ECR node role)
+
+nameOverride: ""
+fullnameOverride: ""
+
+# -----------------------------------------------------------------------------
+# Application-wide settings shared by apiserver + worker (agent + backend wiring)
+# -----------------------------------------------------------------------------
+app:
+  # Durable store and event/broker transports. These map 1:1 onto the env vars
+  # the code reads (see stream-backend/app/main.py, event_bus.py, worker/).
+  store: postgres            # STREAM_BACKEND_STORE
+  eventBroker: rabbitmq      # STREAM_BACKEND_EVENT_BROKER
+  runnerBackend: celery      # STREAM_BACKEND_RUNNER_BACKEND (celery => runs execute on the worker)
+  celeryQueue: deep-research-runs   # STREAM_BACKEND_CELERY_QUEUE
+
+  # Research agent model selection.
+  research:
+    provider: bedrock        # RESEARCH_AGENT_PROVIDER (bedrock | google | anthropic | openai)
+    model: moonshotai.kimi-k2.5   # RESEARCH_AGENT_MODEL
+
+  aws:
+    region: eu-north-1       # AWS_REGION (Bedrock)
+    # Bedrock auth. Prefer IRSA (serviceAccount.annotations) over static keys.
+    # When useProfile is false the AWS_BEDROCK_PROFILE env is omitted so the
+    # default credential chain (IRSA / instance role / static keys) is used.
+    useProfile: false
+    profile: ""              # AWS_BEDROCK_PROFILE (only if useProfile: true)
+
+  logLevel: INFO             # STREAM_BACKEND_LOG_LEVEL
+
+  # Extra free-form env applied to apiserver + worker (non-secret).
+  extraEnv: {}
+    # SOME_FLAG: "true"
+
+# -----------------------------------------------------------------------------
+# Secrets. Provide real values here or via `--set-string secrets.xxx=...`, or
+# set secrets.create=false and reference a pre-existing Secret with the same keys.
+# -----------------------------------------------------------------------------
+secrets:
+  create: true
+  existingSecret: ""         # if set, chart-managed Secret is not created
+
+  # Model / tool API keys (only those relevant to app.research.provider are required).
+  tavilyApiKey: ""           # TAVILY_API_KEY  (web search — required)
+  googleApiKey: ""           # GOOGLE_API_KEY
+  anthropicApiKey: ""        # ANTHROPIC_API_KEY
+  openaiApiKey: ""           # OPENAI_API_KEY
+  langsmithApiKey: ""        # LANGSMITH_API_KEY
+
+  # AWS static credentials (leave blank when using IRSA / instance role).
+  awsAccessKeyId: ""         # AWS_ACCESS_KEY_ID
+  awsSecretAccessKey: ""     # AWS_SECRET_ACCESS_KEY
+  awsSessionToken: ""        # AWS_SESSION_TOKEN (optional)
+
+# -----------------------------------------------------------------------------
+# ServiceAccount (attach IRSA role for Bedrock/ECR via annotations)
+# -----------------------------------------------------------------------------
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+    # eks.amazonaws.com/role-arn: arn:aws:iam::<acct>:role/deep-research-bedrock
+
+# -----------------------------------------------------------------------------
+# PostgreSQL (StatefulSet + headless Service + PVC on EBS)
+# -----------------------------------------------------------------------------
+postgres:
+  enabled: true
+  # Use an external managed database (e.g. RDS) instead of the in-cluster one.
+  external:
+    enabled: false
+    # Full DSN; when set, apiserver/worker use it verbatim and no StatefulSet is deployed.
+    connectionUrl: ""        # postgres://user:pass@host:5432/db?sslmode=require
+
+  image:
+    repository: postgres
+    tag: "16-alpine"
+    pullPolicy: IfNotPresent
+
+  auth:
+    username: postgres
+    password: postgres       # override in production (or use secrets/external RDS)
+    database: deepresearch
+
+  service:
+    port: 5432
+
+  persistence:
+    enabled: true
+    storageClassName: ebs-gp3
+    accessModes: ["ReadWriteOnce"]
+    size: 10Gi
+
+  resources:
+    requests:
+      cpu: "250m"
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+
+# -----------------------------------------------------------------------------
+# RabbitMQ (StatefulSet: AMQP 5672 for Celery + Streams 5552 for events)
+# -----------------------------------------------------------------------------
+rabbitmq:
+  enabled: true
+  external:
+    enabled: false
+    amqpUrl: ""              # amqp://user:pass@host:5672//
+    streamUrl: ""            # rabbitmq-stream://user:pass@host:5552/
+
+  image:
+    repository: rabbitmq
+    tag: "3.13-management"
+    pullPolicy: IfNotPresent
+
+  auth:
+    username: guest
+    password: guest          # override in production
+
+  ports:
+    amqp: 5672
+    stream: 5552
+    management: 15672
+
+  persistence:
+    enabled: true
+    storageClassName: ebs-gp3
+    accessModes: ["ReadWriteOnce"]
+    size: 8Gi
+
+  # Streams retain events for this many hours (matches app default).
+  streamMaxAgeHours: 12
+
+  resources:
+    requests:
+      cpu: "250m"
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+
+# -----------------------------------------------------------------------------
+# apiserver (FastAPI / uvicorn) — stateless, autoscaled
+# -----------------------------------------------------------------------------
+apiserver:
+  image:
+    repository: deep-research-backend
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  replicas: 2
+  containerPort: 8123
+
+  service:
+    type: ClusterIP
+    port: 8123
+
+  resources:
+    requests:
+      cpu: "500m"
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+# -----------------------------------------------------------------------------
+# worker (Celery) — stateless, autoscaled. Shares the apiserver image.
+# -----------------------------------------------------------------------------
+worker:
+  image:
+    repository: deep-research-backend
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  replicas: 2
+  # Celery pool + concurrency. Threads pool matches the project's guidance.
+  pool: threads
+  concurrency: 4
+
+  resources:
+    requests:
+      cpu: "500m"
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 3Gi
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+# -----------------------------------------------------------------------------
+# ui (nginx serving the SPA + reverse-proxying /api to the apiserver)
+# -----------------------------------------------------------------------------
+ui:
+  image:
+    repository: deep-research-ui
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  replicas: 2
+  containerPort: 8080
+
+  # Browser-facing API base. "/api" keeps the browser same-origin (nginx proxies
+  # it to the apiserver). Set to an absolute URL to call the API cross-origin.
+  apiUrl: "/api"
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  resources:
+    requests:
+      cpu: "50m"
+      memory: 64Mi
+    limits:
+      cpu: "500m"
+      memory: 256Mi
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+
+# -----------------------------------------------------------------------------
+# Ingress (defaults to the AWS Load Balancer Controller / ALB)
+# -----------------------------------------------------------------------------
+ingress:
+  enabled: true
+  className: alb
+  # Sensible ALB defaults; internet-facing, IP target type, health check on the UI.
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+  host: ""                   # e.g. research.example.com ("" => path-based on the LB DNS)
+  tls:
+    enabled: false
+    secretName: ""

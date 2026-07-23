@@ -1,0 +1,85 @@
+# Example AWS/EKS overrides. Use with:
+#   helm upgrade --install deep-research deploy/helm/deep-research \
+#     -n deep-research --create-namespace \
+#     -f deploy/helm/deep-research/values-aws.yaml \
+#     --set-string secrets.tavilyApiKey=$TAVILY_API_KEY
+#
+# Prereqs on the cluster:
+#   - EBS CSI driver + a StorageClass named "ebs-gp3" (see ../../ebs-gp3-storageclass.yaml)
+#   - metrics-server (for HPA)
+#   - AWS Load Balancer Controller (for the ALB ingress)
+
+global:
+  # Push images here first (see deploy/README.md for build/push commands).
+  imageRegistry: 553138586148.dkr.ecr.eu-north-1.amazonaws.com
+
+app:
+  research:
+    provider: bedrock
+    model: moonshotai.kimi-k2.5
+  aws:
+    region: eu-north-1
+    # Prefer IRSA over static keys — leave useProfile false and attach a role below.
+    useProfile: false
+
+serviceAccount:
+  create: true
+  annotations:
+    # IAM role (IRSA) granting bedrock:InvokeModel* — create with eksctl/iam.
+    eks.amazonaws.com/role-arn: arn:aws:iam::553138586148:role/deep-research-bedrock
+
+postgres:
+  # Swap to an external RDS instance in production instead of the in-cluster DB:
+  # external:
+  #   enabled: true
+  #   connectionUrl: "postgresql://postgres:CHANGEME@database.xxxx.eu-north-1.rds.amazonaws.com:5432/deepresearch?sslmode=require"
+  persistence:
+    storageClassName: ebs-gp3
+    size: 20Gi
+  auth:
+    password: "CHANGEME-strong-password"
+
+rabbitmq:
+  persistence:
+    storageClassName: ebs-gp3
+    size: 10Gi
+  auth:
+    password: "CHANGEME-strong-password"
+
+apiserver:
+  image:
+    repository: deep-research-backend
+    tag: latest
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+
+worker:
+  image:
+    repository: deep-research-backend
+    tag: latest
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 20
+
+ui:
+  image:
+    repository: deep-research-ui
+    tag: latest
+  apiUrl: "/api"
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+
+ingress:
+  enabled: true
+  className: alb
+  host: ""   # set to your DNS name once the ALB is provisioned
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz

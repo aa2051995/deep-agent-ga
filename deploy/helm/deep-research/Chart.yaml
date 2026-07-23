@@ -1,0 +1,19 @@
+apiVersion: v2
+name: deep-research
+description: >-
+  Deep Research stream backend on Kubernetes (EKS): PostgreSQL, RabbitMQ
+  (AMQP + Streams), the FastAPI apiserver, the Celery worker, and the React UI,
+  wired together with autoscaling for the stateless tiers.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - deep-research
+  - langgraph
+  - fastapi
+  - celery
+  - rabbitmq
+  - postgres
+  - eks
+maintainers:
+  - name: deep-research

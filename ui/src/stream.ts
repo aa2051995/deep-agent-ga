@@ -8,7 +8,18 @@ import type {
 import { logger } from "./logger";
 import type { ProtocolEvent } from "./types";
 
-export const DEFAULT_API_URL = "http://localhost:2024";
+// Resolve the backend base URL at runtime so the same static bundle works in
+// any environment. In Kubernetes the UI container writes `window.__API_URL__`
+// (see ui/docker-entrypoint.sh, fed from the `API_URL` env var / Helm values);
+// when unset we fall back to the local dev server.
+declare global {
+  interface Window {
+    __API_URL__?: string;
+  }
+}
+
+export const DEFAULT_API_URL =
+  (typeof window !== "undefined" && window.__API_URL__) || "http://localhost:2024";
 export const ASSISTANT_ID = "deep-agent";
 
 export type DeepResearchState = {

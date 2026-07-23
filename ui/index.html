@@ -4,6 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Deep Research</title>
+    <!-- Runtime configuration injected by the container entrypoint (Kubernetes /
+         Helm). Generated fresh on every pod start; ships empty in local dev. -->
+    <script src="/config.js"></script>
   </head>
   <body>
     <div id="root"></div>
