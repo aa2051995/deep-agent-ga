@@ -7,11 +7,23 @@ map $http_upgrade $connection_upgrade {
     ''      close;
 }
 
+# Access-log line that shows, per request, which upstream was hit and what it
+# returned — so `kubectl logs deploy/<release>-ui` reveals whether /api/* calls
+# actually reached the apiserver (upstream=...) and its status/latency.
+log_format dr_upstream '$remote_addr host=$host "$request" '
+    'status=$status bytes=$body_bytes_sent '
+    'upstream=$upstream_addr upstream_status=$upstream_status '
+    'req_time=$request_time upstream_time=$upstream_response_time '
+    'ref="$http_referer"';
+
 server {
     listen 8080;
     server_name _;
     root /usr/share/nginx/html;
     index index.html;
+
+    access_log /dev/stdout dr_upstream;
+    error_log  /dev/stderr warn;
 
     # Never cache the runtime config or the entrypoint HTML.
     location = /config.js {
@@ -52,5 +64,26 @@ server {
     location = /healthz {
         access_log off;
         return 200 "ok\n";
+    }
+
+    # --- Diagnostics -------------------------------------------------------
+    # What this container was configured with (written by docker-entrypoint.sh).
+    #   curl http://<host>/__debug
+    location = /__debug {
+        default_type application/json;
+        add_header Cache-Control "no-store";
+        alias /usr/share/nginx/html/__debug.json;
+    }
+
+    # Live end-to-end check of the UI->apiserver proxy path: this proxies to the
+    # backend's /health THROUGH this pod's nginx, so a 200 here proves the UI can
+    # reach the apiserver. A 502/504 means the upstream is unreachable.
+    #   curl http://<host>/__api_health
+    location = /__api_health {
+        add_header Cache-Control "no-store";
+        proxy_pass ${APISERVER_UPSTREAM}/health;
+        proxy_set_header Host $host;
+        proxy_connect_timeout 3s;
+        proxy_read_timeout 5s;
     }
 }

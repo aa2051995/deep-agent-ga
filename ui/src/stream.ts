@@ -72,6 +72,20 @@ export function defaultApiBase(): string {
 export const DEFAULT_API_URL = resolveApiUrl(defaultApiBase());
 export const ASSISTANT_ID = "deep-agent";
 
+// One-time startup banner so the backend wiring is verifiable from the browser
+// console (DevTools): the resolved API base, the raw runtime config, the page
+// origin, and whether crypto.randomUUID is native (secure context) or polyfilled.
+if (typeof window !== "undefined") {
+  // eslint-disable-next-line no-console
+  console.info(
+    "[deep-research] api-base=%s  __API_URL__=%o  origin=%s  randomUUID=%s",
+    DEFAULT_API_URL,
+    window.__API_URL__,
+    window.location?.origin,
+    typeof window.crypto?.randomUUID === "function" ? "available" : "MISSING",
+  );
+}
+
 export type DeepResearchState = {
   messages: Message[];
   [key: string]: unknown;

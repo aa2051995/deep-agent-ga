@@ -116,6 +116,59 @@ kubectl port-forward -n deep-research svc/deep-research-ui 8080:80
 # http://localhost:8080
 ```
 
+## Verifying / debugging the UI → backend connection
+
+The UI container ships built-in diagnostics.
+
+**Container startup log** — the entrypoint prints the resolved config and probes
+the backend from inside the pod:
+
+```bash
+kubectl logs deploy/deep-research-ui -n <ns> | head -20
+# deep-research UI container config:
+#   API_URL (browser window.__API_URL__)      = /api
+#   APISERVER_UPSTREAM (nginx /api/ proxy dst) = http://deep-research-apiserver:8123
+#   ...
+# deep-research: backend health OK  http://deep-research-apiserver:8123/health -> {"status":"ok"}
+```
+
+**Per-request access log** shows which upstream each `/api/*` call hit and its
+status — so you can see requests actually reaching the apiserver:
+
+```bash
+kubectl logs -f deploy/deep-research-ui -n <ns>
+# ... "POST /api/threads/search HTTP/1.1" status=200 upstream=10.0.1.23:8123 upstream_status=200 ...
+```
+
+**Debug endpoints** (served by the UI, reachable through the load balancer):
+
+- `GET /__debug` → JSON of what the container was configured with
+  (`api_url`, `apiserver_upstream`, `pod`).
+- `GET /__api_health` → proxies to the apiserver's `/health` **through** the UI's
+  nginx. A `200` proves the UI can reach the apiserver; a `502/504` means it
+  cannot (check the apiserver Service / pod).
+- `GET /config.js` → must read `window.__API_URL__ = "/api";`.
+
+```bash
+curl http://<elb-host>/__debug
+curl http://<elb-host>/__api_health      # 200 {"status":"ok"} == proxy path works
+```
+
+**Browser console** logs a one-time banner on load:
+
+```
+[deep-research] api-base=http://<elb>/api  __API_URL__="/api"  origin=http://<elb>  randomUUID=available
+```
+
+If `randomUUID=MISSING` you're on an insecure origin without the polyfill (rebuild
+the UI image); if `api-base` points at `localhost:2024`, `config.js` didn't load.
+
+**Backend side** — the apiserver logs its resolved stores/brokers at startup:
+
+```bash
+kubectl logs deploy/deep-research-apiserver -n <ns> | grep -E "repository.create|event_broker|assistants"
+```
+
 ## Configuration reference
 
 All knobs live in [`helm/deep-research/values.yaml`](helm/deep-research/values.yaml)
