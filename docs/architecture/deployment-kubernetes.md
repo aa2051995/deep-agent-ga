@@ -96,6 +96,17 @@ broker.
   at container start into `/config.js` (`window.__API_URL__`, read by
   `ui/src/stream.ts`), fed from the `API_URL` env / `ui.apiUrl` value.
 
+## Startup ordering & reconnection
+
+The apiserver and worker depend on Postgres and RabbitMQ. To tolerate a
+slow/delayed dependency at boot (headless Service DNS only resolves to *ready*
+endpoints, so the name is unresolvable until the dependency is up), each runs an
+init container **`wait-for-deps`** that blocks until `postgres:5432` and
+`rabbitmq:5672`/`5552` accept TCP (configurable via `app.waitForDependencies`;
+skipped for external dependencies). *Runtime* reconnection after a dependency
+restart is handled by the connection pools (psycopg auto-reconnect; the assistant
+store keeps its pool and retries schema) and the RabbitMQ broker's own reconnect.
+
 ## AWS specifics
 
 - **Storage**: PVCs bind to the `ebs-gp3` StorageClass (EBS CSI driver).

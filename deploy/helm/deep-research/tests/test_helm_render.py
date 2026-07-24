@@ -165,7 +165,7 @@ def test_shared_assistant_store_wires_apiserver_and_worker():
     for component in ("apiserver", "worker"):
         dep = _by(manifests, "Deployment", component)
         spec = dep["spec"]["template"]["spec"]
-        assert [i["name"] for i in spec["initContainers"]] == ["seed-assistants"]
+        assert "seed-assistants" in [i["name"] for i in spec["initContainers"]]
         assert spec["volumes"][0]["persistentVolumeClaim"]["claimName"].endswith("-assistants")
         mount = spec["containers"][0]["volumeMounts"][0]
         assert mount["mountPath"] == "/data/assistants"
@@ -183,7 +183,8 @@ def test_assistant_store_disabled_by_default(manifests):
     assert not [m for m in manifests if m.get("kind") == "PersistentVolumeClaim"]
     for component in ("apiserver", "worker"):
         spec = _by(manifests, "Deployment", component)["spec"]["template"]["spec"]
-        assert "initContainers" not in spec
+        # No seed init container (wait-for-deps may still be present by default).
+        assert "seed-assistants" not in [i["name"] for i in spec.get("initContainers", [])]
         assert "STREAM_BACKEND_ASSISTANTS_DIR" not in _env_map(_by(manifests, "Deployment", component))
 
 
@@ -200,6 +201,29 @@ def test_postgres_assistant_store_backend():
 def test_filesystem_backend_sets_no_assistant_store_env(manifests):
     for component in ("apiserver", "worker"):
         assert "STREAM_BACKEND_ASSISTANT_STORE" not in _env_map(_by(manifests, "Deployment", component))
+
+
+def test_wait_for_deps_init_container_on_apiserver_and_worker(manifests):
+    """apiserver + worker block on an init container until postgres/rabbitmq accept
+    TCP, so a delayed dependency doesn't crash them at boot. The UI has none."""
+    for component in ("apiserver", "worker"):
+        spec = _by(manifests, "Deployment", component)["spec"]["template"]["spec"]
+        names = [i["name"] for i in spec.get("initContainers", [])]
+        assert "wait-for-deps" in names
+        init = next(i for i in spec["initContainers"] if i["name"] == "wait-for-deps")
+        script = "\n".join(init["command"])
+        # waits for postgres:5432 and rabbitmq amqp:5672 + stream:5552
+        assert "5432" in script and "5672" in script and "5552" in script
+
+    ui = _by(manifests, "Deployment", "ui")["spec"]["template"]["spec"]
+    assert "wait-for-deps" not in [i["name"] for i in ui.get("initContainers", [])]
+
+
+def test_wait_for_deps_can_be_disabled():
+    manifests = _render("--set", "app.waitForDependencies.enabled=false")
+    for component in ("apiserver", "worker"):
+        spec = _by(manifests, "Deployment", component)["spec"]["template"]["spec"]
+        assert "wait-for-deps" not in [i["name"] for i in spec.get("initContainers", [])]
 
 
 def test_external_postgres_replaces_statefulset():

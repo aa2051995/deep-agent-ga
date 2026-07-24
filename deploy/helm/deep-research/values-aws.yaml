@@ -34,6 +34,7 @@ app:
 
 serviceAccount:
   create: true
+  name: deep-research
   annotations:
     # IAM role (IRSA) granting bedrock:InvokeModel* — create with eksctl/iam.
     eks.amazonaws.com/role-arn: arn:aws:iam::553138586148:role/deep-research-bedrock
@@ -47,14 +48,14 @@ postgres:
     storageClassName: ebs-gp3
     size: 20Gi
   auth:
-    password: "CHANGEME-strong-password"
+    password: "am12345Eee"
 
 rabbitmq:
   persistence:
     storageClassName: ebs-gp3
     size: 10Gi
   auth:
-    password: "CHANGEME-strong-password"
+    password: "guest"
 
 apiserver:
   image:
@@ -62,8 +63,8 @@ apiserver:
     tag: latest
   autoscaling:
     enabled: true
-    minReplicas: 2
-    maxReplicas: 10
+    minReplicas: 1
+    maxReplicas: 6
 
 worker:
   image:
@@ -71,8 +72,8 @@ worker:
     tag: latest
   autoscaling:
     enabled: true
-    minReplicas: 2
-    maxReplicas: 20
+    minReplicas: 1
+    maxReplicas: 6
 
 ui:
   image:
@@ -81,7 +82,7 @@ ui:
   apiUrl: "/api"
   autoscaling:
     enabled: true
-    minReplicas: 2
+    minReplicas: 1
     maxReplicas: 6
 
 ingress:

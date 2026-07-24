@@ -62,6 +62,16 @@ app:
       accessModes: ["ReadWriteMany"]
       size: 1Gi
 
+  # Block apiserver/worker startup until their in-cluster dependencies (postgres,
+  # rabbitmq AMQP + stream ports) accept TCP connections. This makes the app
+  # tolerant of a slow/delayed dependency at boot (no DNS "Name or service not
+  # known" crash, no failed one-shot seeding). Runtime reconnection after a
+  # dependency restart is handled by the connection pools / broker reconnect
+  # logic, independent of this.
+  waitForDependencies:
+    enabled: true
+    timeoutSeconds: 300        # give up (and let the pod restart) after this long
+
   # Extra free-form env applied to apiserver + worker (non-secret).
   extraEnv: {}
     # SOME_FLAG: "true"
@@ -218,7 +228,7 @@ worker:
 
   replicas: 1
   # Celery pool + concurrency. Threads pool matches the project's guidance.
-  pool: threads
+  pool: prefork
   concurrency: 4
 
   resources:

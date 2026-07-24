@@ -27,8 +27,13 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if .Values.app.assistantsStore.persistence.enabled }}
+      {{- $hasInclusterDeps := or (and .Values.postgres.enabled (not .Values.postgres.external.enabled)) (and .Values.rabbitmq.enabled (not .Values.rabbitmq.external.enabled)) }}
+      {{- $wait := and .Values.app.waitForDependencies.enabled $hasInclusterDeps }}
+      {{- if or $wait .Values.app.assistantsStore.persistence.enabled }}
       initContainers:
+        {{- if $wait }}
+        {{- include "deep-research.waitForDepsInit" (dict "root" $ "image" .Values.apiserver.image) | nindent 8 }}
+        {{- end }}
         {{- include "deep-research.assistantsInitContainer" (dict "root" $ "image" .Values.apiserver.image) | nindent 8 }}
       {{- end }}
       containers:

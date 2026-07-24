@@ -104,6 +104,45 @@ existing/edited assistants are never overwritten on restart.
 {{- end }}
 {{- end -}}
 
+{{/* Init container that blocks until the in-cluster dependencies accept TCP.
+     Emits nothing when there are no in-cluster deps to wait for (e.g. all
+     external). Uses the app image (already pulled) + a plain socket check. */}}
+{{- define "deep-research.waitForDepsInit" -}}
+{{- $root := .root -}}
+{{- $targets := list -}}
+{{- if and $root.Values.postgres.enabled (not $root.Values.postgres.external.enabled) -}}
+{{- $targets = append $targets (printf "(%q, %v)" (include "deep-research.postgres.fullname" $root) $root.Values.postgres.service.port) -}}
+{{- end -}}
+{{- if and $root.Values.rabbitmq.enabled (not $root.Values.rabbitmq.external.enabled) -}}
+{{- $targets = append $targets (printf "(%q, %v)" (include "deep-research.rabbitmq.fullname" $root) $root.Values.rabbitmq.ports.amqp) -}}
+{{- $targets = append $targets (printf "(%q, %v)" (include "deep-research.rabbitmq.fullname" $root) $root.Values.rabbitmq.ports.stream) -}}
+{{- end -}}
+{{- if $targets }}
+- name: wait-for-deps
+  image: {{ include "deep-research.appImage" (dict "root" $root "image" .image) }}
+  imagePullPolicy: {{ .image.pullPolicy }}
+  command:
+    - python
+    - -c
+    - |
+      import socket, sys, time
+      targets = [{{ join ", " $targets }}]
+      deadline = time.time() + {{ $root.Values.app.waitForDependencies.timeoutSeconds }}
+      for host, port in targets:
+          while True:
+              try:
+                  with socket.create_connection((host, port), timeout=3):
+                      print(f"wait-for-deps: {host}:{port} reachable", flush=True)
+                      break
+              except OSError as exc:
+                  if time.time() > deadline:
+                      print(f"wait-for-deps: TIMEOUT {host}:{port}: {exc}", flush=True)
+                      sys.exit(1)
+                  print(f"wait-for-deps: waiting for {host}:{port} ...", flush=True)
+                  time.sleep(2)
+{{- end }}
+{{- end -}}
+
 {{- define "deep-research.assistantsVolumeMount" -}}
 {{- if .Values.app.assistantsStore.persistence.enabled }}
 - name: assistants

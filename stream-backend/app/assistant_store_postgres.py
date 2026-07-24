@@ -70,6 +70,7 @@ class PostgresAssistantStore:
         # requires the env to be present (keeps the image import guard happy).
         self._dsn_explicit = dsn
         self._pool: Any = None
+        self._schema_ready = False
         self._lock = threading.RLock()
         self._scratch = (
             Path(scratch_dir)
@@ -82,28 +83,37 @@ class PostgresAssistantStore:
 
     # ---- connection / schema --------------------------------------------
     def _get_pool(self) -> Any:
-        if self._pool is not None:
+        # Fast path once both the pool exists and the schema has been created.
+        if self._pool is not None and self._schema_ready:
             return self._pool
         with self._lock:
-            if self._pool is not None:
-                return self._pool
-            try:
-                from psycopg_pool import ConnectionPool
-            except Exception as exc:  # pragma: no cover - optional dependency
-                raise RuntimeError(
-                    "Install psycopg[binary,pool] to use STREAM_BACKEND_ASSISTANT_STORE=postgres."
-                ) from exc
-            pool = ConnectionPool(
-                conninfo=_resolve_dsn(self._dsn_explicit),
-                min_size=1,
-                max_size=int(os.getenv("STREAM_BACKEND_ASSISTANT_POOL_MAX", "4")),
-                kwargs={"autocommit": True},
-                open=False,
-            )
-            pool.open()
-            self._ensure_schema(pool)
-            self._pool = pool
-            logger.info("assistants.pg.pool_ready")
+            # Create the pool ONCE and keep it. psycopg_pool reconnects in the
+            # background, so if Postgres is slow/delayed at boot (or restarts
+            # later) the same pool recovers — we must not drop it on failure or
+            # we leak its background workers and never reconnect.
+            if self._pool is None:
+                try:
+                    from psycopg_pool import ConnectionPool
+                except Exception as exc:  # pragma: no cover - optional dependency
+                    raise RuntimeError(
+                        "Install psycopg[binary,pool] to use STREAM_BACKEND_ASSISTANT_STORE=postgres."
+                    ) from exc
+                pool = ConnectionPool(
+                    conninfo=_resolve_dsn(self._dsn_explicit),
+                    min_size=1,
+                    max_size=int(os.getenv("STREAM_BACKEND_ASSISTANT_POOL_MAX", "4")),
+                    kwargs={"autocommit": True},
+                    open=False,
+                )
+                pool.open()
+                self._pool = pool
+                logger.info("assistants.pg.pool_ready")
+            # Create the schema once. If Postgres is not reachable yet this
+            # raises (caught by the best-effort callers), the pool is retained,
+            # and the NEXT call retries the schema on the recovered pool.
+            if not self._schema_ready:
+                self._ensure_schema(self._pool)
+                self._schema_ready = True
             return self._pool
 
     def _ensure_schema(self, pool: Any) -> None:
