@@ -7,7 +7,13 @@ FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    # Put the app root on the import path for EVERY process this image spawns
+    # (uvicorn, the celery worker, and its forked/threaded children). Without
+    # this, `app`/`worker` resolve via the launcher's cwd but the lazily-imported
+    # `research_agent` package can fail with ModuleNotFoundError in worker
+    # children ("No module named 'research_agent'").
+    PYTHONPATH=/app
 
 WORKDIR /app
 
@@ -42,7 +48,12 @@ COPY . .
 # build if any of them hits a missing dependency. It performs NO network I/O:
 # the Postgres pool and RabbitMQ broker are constructed lazily (their setup()
 # runs at container start, not import), so no DB/broker is needed here.
-RUN python -c "import worker.tasks; print('import check: application graph imports cleanly')"
+# Also import research_agent explicitly: it is imported LAZILY (inside functions
+# in assistant_builder/research_runtime), so `import worker.tasks` alone would
+# not catch it missing — which is exactly how "No module named 'research_agent'"
+# reached the worker at run time.
+RUN python -c "import worker.tasks, research_agent.prompts, research_agent.tools; \
+print('import check: application graph + research_agent import cleanly')"
 
 # uvicorn (apiserver) listens here; the worker ignores it.
 EXPOSE 8123
