@@ -65,13 +65,23 @@ export function defaultApiBase(): string {
 
 export const DEFAULT_API_URL = resolveApiUrl(defaultApiBase());
 
+// Build id baked in at build time (see vite.config.ts). `typeof` guard keeps this
+// safe under vitest, where the define is not applied.
+declare const __BUILD_ID__: string;
+export const BUILD_ID =
+  typeof __BUILD_ID__ !== "undefined" ? __BUILD_ID__ : "dev";
+
 // One-time startup banner so the backend wiring is verifiable from the browser
-// console (DevTools): the resolved API base, the raw runtime config, the page
-// origin, and whether crypto.randomUUID is native (secure context) or polyfilled.
+// console (DevTools): which build is running, the resolved API base, the raw
+// runtime config, the page origin, and whether crypto.randomUUID is native
+// (secure context) or polyfilled. The SAME banner prints on the chat page and
+// the assistant-manager page (?assistants=1) since both import this module — so
+// you can confirm both use the same resolved API base.
 if (typeof window !== "undefined") {
   // eslint-disable-next-line no-console
   console.info(
-    "[deep-research] api-base=%s  __API_URL__=%o  origin=%s  randomUUID=%s",
+    "[deep-research] build=%s  api-base=%s  __API_URL__=%o  origin=%s  randomUUID=%s",
+    BUILD_ID,
     DEFAULT_API_URL,
     window.__API_URL__,
     window.location?.origin,
