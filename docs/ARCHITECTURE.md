@@ -227,3 +227,15 @@ apiserver (same-origin). All inter-service connection strings are generated from
 in-cluster Service DNS and injected as the same env vars `set_env()` uses. See
 [`docs/architecture/deployment-kubernetes.md`](architecture/deployment-kubernetes.md)
 and [`deploy/README.md`](../deploy/README.md).
+
+### Continuous delivery (Jenkins on EKS)
+
+A Jenkins multibranch pipeline ([`Jenkinsfile`](../Jenkinsfile)) delivers the app
+GitOps-style: **pull requests** are validated (helm lint/render, chart + pipeline
+unit tests, and a no-push image build), and **merges to `main`** build both app
+images with **kaniko**, push them tagged with the immutable **git SHA** (plus
+rolling `latest`), then `helm upgrade --install` pins `image.tag=<git-sha>` and
+waits for the rollout. Agents run **as pods on the cluster**: one `jenkins-agent`
+ServiceAccount holds an **IRSA** role for ECR push and **namespaced RBAC** for the
+deploy, so no static AWS keys or kubeconfig are involved. Full setup and the
+IAM/RBAC manifests live in [`deploy/cicd/`](../deploy/cicd/README.md).

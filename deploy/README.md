@@ -61,6 +61,15 @@ clients (rstream) cannot reach the stream leader from other pods.
 - *Optional:* **EFS CSI driver** + an RWX StorageClass (e.g. `efs-sc`) if you
   enable the shared assistant store (see below).
 
+## Automated delivery (CI/CD)
+
+The steps below (build/push/deploy) are for manual/first-time setup. Once the
+Jenkins pipeline is configured, **merges to `main` do all of this automatically**
+(and pull requests are validated before merge). See
+[`cicd/README.md`](cicd/README.md) — the pipeline builds images with kaniko,
+tags them with the git SHA, and runs the same `helm upgrade --install` shown in
+step 2, pinning `image.tag=<git-sha>`.
+
 ## 1. Build & push images
 
 ```bash
