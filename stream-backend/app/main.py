@@ -138,6 +138,7 @@ def set_env():
     os.environ.setdefault("STREAM_BACKEND_EVENT_BROKER", "rabbitmq")
     os.environ.setdefault("RABBITMQ_STREAM_URL", "rabbitmq-stream://guest:guest@127.0.0.1:5552/")
     os.environ.setdefault("STREAM_BACKEND_CELERY_QUEUE", "deep-research-runs")
+    os.environ.setdefault("STREAM_BACKEND_ASSISTANT_STORE", "pg")
     # Celery's terminate=True requires a worker pool that can kill a running
     # slot (prefork, via SIGTERM/SIGKILL to a child process). This project's
     # worker guide recommends --pool=threads/--pool=solo on Windows (no

@@ -15,4 +15,4 @@ tavily-python>=0.5.0
 boto3>=1.34.0
 # Optional: only needed for assistants that use MCP tools (imported behind a
 # try/except in app/assistant_builder.py; the app degrades gracefully without it).
-# langchain-mcp-adapters>=0.1.0
+langchain-mcp-adapters>=0.1.0

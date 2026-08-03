@@ -32,7 +32,7 @@ app:
     model: moonshotai.kimi-k2.5   # RESEARCH_AGENT_MODEL
 
   aws:
-    region: eu-north-1       # AWS_REGION (Bedrock)
+    region: us-east-1      # AWS_REGION (Bedrock)
     # Bedrock auth. Prefer IRSA (serviceAccount.annotations) over static keys.
     # When useProfile is false the AWS_BEDROCK_PROFILE env is omitted so the
     # default credential chain (IRSA / instance role / static keys) is used.
@@ -100,8 +100,8 @@ secrets:
 # ServiceAccount (attach IRSA role for Bedrock/ECR via annotations)
 # -----------------------------------------------------------------------------
 serviceAccount:
-  create: true
-  name: ""
+  create: false
+  name: "deep-research-bedrock-account"
   annotations: {}
     # eks.amazonaws.com/role-arn: arn:aws:iam::<acct>:role/deep-research-bedrock
 

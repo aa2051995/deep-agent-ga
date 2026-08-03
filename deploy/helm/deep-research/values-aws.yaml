@@ -20,7 +20,7 @@ app:
     provider: bedrock
     model: moonshotai.kimi-k2.5
   aws:
-    region: eu-north-1
+    region: us-east-1
     # Prefer IRSA over static keys — leave useProfile false and attach a role below.
     useProfile: false
   # Store assistants (config + skill/memory files) in Postgres, shared by
@@ -33,11 +33,12 @@ app:
       enabled: false
 
 serviceAccount:
-  create: true
-  name: deep-research
+  create: false
+  name: "deep-research-bedrock-account"
+  # name: deep-research
   annotations:
     # IAM role (IRSA) granting bedrock:InvokeModel* — create with eksctl/iam.
-    eks.amazonaws.com/role-arn: arn:aws:iam::553138586148:role/deep-research-bedrock
+    # eks.amazonaws.com/role-arn: arn:aws:iam::553138586148:role/deep-research-bedrock
 
 postgres:
   # Swap to an external RDS instance in production instead of the in-cluster DB:
