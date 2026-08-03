@@ -1,7 +1,7 @@
 # Helm deploy: `set_env()` forces a bogus `AWS_BEDROCK_PROFILE` and breaks IRSA
 
 **Date:** 2026-07-23
-**Area:** Kubernetes/Helm deployment (`deploy/helm/deep-research`) + backend env bootstrap
+**Area:** Kubernetes/Helm deployment (`deploy/helm/deep-agent-ga`) + backend env bootstrap
 
 ## Root cause
 
@@ -31,7 +31,7 @@ error even though IRSA is correctly configured.
 
 - `stream-backend/app/main.py` (`set_env()`, the `setdefault` line)
 - `stream-backend/app/assistant_builder.py`, `research_runtime.py`, `bedrock_catalog.py` (read the profile)
-- `deploy/helm/deep-research/templates/_helpers.tpl` (`deep-research.backendEnv`)
+- `deploy/helm/deep-agent-ga/templates/_helpers.tpl` (`deep-agent-ga.backendEnv`)
 
 ## Solution
 

@@ -26,8 +26,8 @@ import {
   sameModel,
   updateAssistant,
 } from "./assistantApi";
-import { DEFAULT_API_URL, messageText, useDeepResearchStream } from "./stream";
-import type { DebugEvent, DeepResearchStream } from "./stream";
+import { DEFAULT_API_URL, messageText, useDeepAgentGaStream } from "./stream";
+import type { DebugEvent, DeepAgentGaStream } from "./stream";
 import { selectInputRequests, subagentStreamToCard } from "./selectors";
 import { hasEarlierUnhydratedRuns, selectRunsToHydrate } from "./runHydration";
 import { cancelCurrentRunRequest } from "./runControl";
@@ -41,7 +41,7 @@ import {
 } from "./messageMerge";
 import type { InputRequest, ProtocolEvent, RunCheckpointSnapshot, RunSummary, SubagentCard, ThreadSummary } from "./types";
 
-const CURRENT_THREAD_KEY = "deep-research-ui:current-thread";
+const CURRENT_THREAD_KEY = "deep-agent-ga-ui:current-thread";
 const THREAD_QUERY_PARAM = "thread_id";
 const STREAM_MODES = [
   "messages-tuple",
@@ -502,7 +502,7 @@ function subagentCardsFromEvents(events: ProtocolEvent[]): SubagentCard[] {
 function subagentCardsForLiveRun(
   events: DebugEvent[],
   runId: string | null,
-  subagents: DeepResearchStream["subagents"],
+  subagents: DeepAgentGaStream["subagents"],
 ): SubagentCard[] {
   const runEvents = events.filter((event) => {
     const data = typeof event.data === "object" && event.data !== null ? event.data as Record<string, unknown> : {};
@@ -584,7 +584,7 @@ async function fetchRunActive(
   };
 }
 
-const ACTIVE_ASSISTANT_KEY = "deep-research.activeAssistantId";
+const ACTIVE_ASSISTANT_KEY = "deep-agent-ga.activeAssistantId";
 
 export function App() {
   const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
@@ -628,10 +628,10 @@ export function App() {
   const messagesViewportRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
-  const switchThreadRef = useRef<DeepResearchStream["switchThread"] | null>(null);
+  const switchThreadRef = useRef<DeepAgentGaStream["switchThread"] | null>(null);
   // logger.debug("app.render", { threadId, apiUrl });
 
-  const stream = useDeepResearchStream(
+  const stream = useDeepAgentGaStream(
     apiUrl,
     threadId,
     (nextThreadId) => {
@@ -1027,7 +1027,7 @@ export function App() {
           streamSubgraphs: true,
           streamResumable: true,
           multitaskStrategy: "reject",
-          metadata: { surface: "deep-research-ui" },
+          metadata: { surface: "deep-agent-ga-ui" },
           config: { configurable: threadId ? { thread_id: threadId } : {} },
         },
       );
@@ -1054,7 +1054,7 @@ export function App() {
         streamSubgraphs: true,
         streamResumable: true,
         multitaskStrategy: "reject",
-        metadata: { surface: "deep-research-ui", action: "resume" },
+        metadata: { surface: "deep-agent-ga-ui", action: "resume" },
       });
       logger.info("resume.completed");
     } catch (caught) {
@@ -1809,7 +1809,7 @@ export function App() {
       <aside className="sidebar">
         <div className="brand">
           <FlaskConical size={20} />
-          <span>Deep Research</span>
+          <span>Deep Agent GA</span>
         </div>
         <button className="new-thread" onClick={newThread} type="button">
           <Plus size={16} />

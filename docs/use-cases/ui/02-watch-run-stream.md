@@ -10,7 +10,7 @@ The steady-state render loop while a run streams: how three inbound channels con
 
 | Channel | Registered by | State it writes | Consumers |
 |---|---|---|---|
-| SDK `useStream` | `useDeepResearchStream` (stream.ts:311) | `stream.messages`, `stream.isLoading`, `stream.subagents`, `stream.activeSubagents`, `stream.interrupts` | E2, M1, M3, topbar status |
+| SDK `useStream` | `useDeepAgentGaStream` (stream.ts:311) | `stream.messages`, `stream.isLoading`, `stream.subagents`, `stream.activeSubagents`, `stream.interrupts` | E2, M1, M3, topbar status |
 | Protocol SSE (**ES1**) | stream.ts:110 | `debugEvents` (→ `stream.debugEvents` via **MS1**) | M1, M2, E14 |
 | Lifecycle EventSource (**E16**) | App.tsx:1439 | none directly — calls `showActiveRun`/`clearActiveRun` → `setActiveRun` | E15 banner, activeRun UI |
 

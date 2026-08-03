@@ -4,7 +4,7 @@ Every user interaction in the UI, traced through the pipeline:
 
 **Event → Handler → State updates → Effects triggered → Re-render → Network requests → DOM updates**
 
-Effect numbers (E1–E16) and `SH1` refer to [ui-effects-table.md](ui-effects-table.md). "SDK" = the `@langchain/langgraph-sdk` `useStream` instance wrapped by `useDeepResearchStream`.
+Effect numbers (E1–E16) and `SH1` refer to [ui-effects-table.md](ui-effects-table.md). "SDK" = the `@langchain/langgraph-sdk` `useStream` instance wrapped by `useDeepAgentGaStream`.
 
 ## Interaction inventory
 

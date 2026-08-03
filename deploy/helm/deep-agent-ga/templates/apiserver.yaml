@@ -1,10 +1,10 @@
-{{- $api := include "deep-research.apiserver.fullname" . -}}
+{{- $api := include "deep-agent-ga.apiserver.fullname" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ $api }}
   labels:
-    {{- include "deep-research.labels" . | nindent 4 }}
+    {{- include "deep-agent-ga.labels" . | nindent 4 }}
     app.kubernetes.io/component: apiserver
 spec:
   {{- if not .Values.apiserver.autoscaling.enabled }}
@@ -12,17 +12,17 @@ spec:
   {{- end }}
   selector:
     matchLabels:
-      {{- include "deep-research.labels" . | nindent 6 }}
+      {{- include "deep-agent-ga.labels" . | nindent 6 }}
       app.kubernetes.io/component: apiserver
   template:
     metadata:
       annotations:
         checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
       labels:
-        {{- include "deep-research.labels" . | nindent 8 }}
+        {{- include "deep-agent-ga.labels" . | nindent 8 }}
         app.kubernetes.io/component: apiserver
     spec:
-      serviceAccountName: {{ include "deep-research.serviceAccountName" . }}
+      serviceAccountName: {{ include "deep-agent-ga.serviceAccountName" . }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -32,20 +32,20 @@ spec:
       {{- if or $wait .Values.app.assistantsStore.persistence.enabled }}
       initContainers:
         {{- if $wait }}
-        {{- include "deep-research.waitForDepsInit" (dict "root" $ "image" .Values.apiserver.image) | nindent 8 }}
+        {{- include "deep-agent-ga.waitForDepsInit" (dict "root" $ "image" .Values.apiserver.image) | nindent 8 }}
         {{- end }}
-        {{- include "deep-research.assistantsInitContainer" (dict "root" $ "image" .Values.apiserver.image) | nindent 8 }}
+        {{- include "deep-agent-ga.assistantsInitContainer" (dict "root" $ "image" .Values.apiserver.image) | nindent 8 }}
       {{- end }}
       containers:
         - name: apiserver
-          image: {{ include "deep-research.appImage" (dict "root" $ "image" .Values.apiserver.image) }}
+          image: {{ include "deep-agent-ga.appImage" (dict "root" $ "image" .Values.apiserver.image) }}
           imagePullPolicy: {{ .Values.apiserver.image.pullPolicy }}
           command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "{{ .Values.apiserver.containerPort }}"]
           ports:
             - name: http
               containerPort: {{ .Values.apiserver.containerPort }}
           env:
-            {{- include "deep-research.backendEnv" . | nindent 12 }}
+            {{- include "deep-agent-ga.backendEnv" . | nindent 12 }}
           readinessProbe:
             httpGet:
               path: /health
@@ -62,11 +62,11 @@ spec:
             {{- toYaml .Values.apiserver.resources | nindent 12 }}
           {{- if .Values.app.assistantsStore.persistence.enabled }}
           volumeMounts:
-            {{- include "deep-research.assistantsVolumeMount" . | nindent 12 }}
+            {{- include "deep-agent-ga.assistantsVolumeMount" . | nindent 12 }}
           {{- end }}
       {{- if .Values.app.assistantsStore.persistence.enabled }}
       volumes:
-        {{- include "deep-research.assistantsVolume" . | nindent 8 }}
+        {{- include "deep-agent-ga.assistantsVolume" . | nindent 8 }}
       {{- end }}
 ---
 apiVersion: v1
@@ -74,12 +74,12 @@ kind: Service
 metadata:
   name: {{ $api }}
   labels:
-    {{- include "deep-research.labels" . | nindent 4 }}
+    {{- include "deep-agent-ga.labels" . | nindent 4 }}
     app.kubernetes.io/component: apiserver
 spec:
   type: {{ .Values.apiserver.service.type }}
   selector:
-    {{- include "deep-research.labels" . | nindent 4 }}
+    {{- include "deep-agent-ga.labels" . | nindent 4 }}
     app.kubernetes.io/component: apiserver
   ports:
     - name: http
@@ -92,7 +92,7 @@ kind: HorizontalPodAutoscaler
 metadata:
   name: {{ $api }}
   labels:
-    {{- include "deep-research.labels" . | nindent 4 }}
+    {{- include "deep-agent-ga.labels" . | nindent 4 }}
     app.kubernetes.io/component: apiserver
 spec:
   scaleTargetRef:

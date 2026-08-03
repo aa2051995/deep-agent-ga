@@ -11,7 +11,7 @@ to the UI.
 ```powershell
 $env:STREAM_BACKEND_RUNNER_BACKEND = "celery"
 $env:STREAM_BACKEND_CELERY_BROKER_URL = "amqp://guest:guest@localhost:5672//"
-$env:STREAM_BACKEND_CELERY_QUEUE = "deep-research-runs"
+$env:STREAM_BACKEND_CELERY_QUEUE = "deep-agent-ga-runs"
 ```
 
 > **`STREAM_BACKEND_RUNNER_BACKEND` must be exactly `celery`** to schedule runs on
@@ -39,7 +39,7 @@ $env:RABBITMQ_STREAM_URL = "rabbitmq-stream://guest:guest@localhost:5552/"
 Run this from `stream-backend`:
 
 ```powershell
-celery -A worker.celery_app.celery_app worker --loglevel=INFO -P threads --queues=deep-research-runs
+celery -A worker.celery_app.celery_app worker --loglevel=INFO -P threads --queues=deep-agent-ga-runs
 ```
 
 Before submitting a run, you can verify task registration:
@@ -51,8 +51,8 @@ celery -A worker.celery_app.celery_app inspect registered
 The worker startup output should include:
 
 ```text
-deep_research.run_agent
-deep_research.resume_agent
+deep_agent_ga.run_agent
+deep_agent_ga.resume_agent
 ```
 
 To cancel Celery tasks with process termination when the API receives a cancel

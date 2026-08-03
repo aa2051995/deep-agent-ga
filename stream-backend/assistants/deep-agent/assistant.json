@@ -1,6 +1,6 @@
 {
   "assistant_id": "deep-agent",
-  "name": "Deep Research Agent",
+  "name": "Deep Agent GA Agent",
   "description": "Web research orchestrator that delegates to a researcher subagent.",
   "created_at": "2026-07-22T12:04:58.215244+00:00",
   "updated_at": "2026-07-22T20:26:02.391735+00:00",

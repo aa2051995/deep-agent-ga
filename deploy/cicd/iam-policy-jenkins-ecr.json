@@ -22,8 +22,8 @@
         "ecr:PutImage"
       ],
       "Resource": [
-        "arn:aws:ecr:us-east-1:553138586148:repository/deepresrepo",
-        "arn:aws:ecr:us-east-1:553138586148:repository/uirepo"
+        "arn:aws:ecr:us-east-1:553138586148:repository/deep-agent-ga-backend",
+        "arn:aws:ecr:us-east-1:553138586148:repository/deep-agent-ga-ui"
       ]
     }
   ]

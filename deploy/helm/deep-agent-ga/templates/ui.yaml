@@ -1,10 +1,10 @@
-{{- $ui := include "deep-research.ui.fullname" . -}}
+{{- $ui := include "deep-agent-ga.ui.fullname" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ $ui }}
   labels:
-    {{- include "deep-research.labels" . | nindent 4 }}
+    {{- include "deep-agent-ga.labels" . | nindent 4 }}
     app.kubernetes.io/component: ui
 spec:
   {{- if not .Values.ui.autoscaling.enabled }}
@@ -12,12 +12,12 @@ spec:
   {{- end }}
   selector:
     matchLabels:
-      {{- include "deep-research.labels" . | nindent 6 }}
+      {{- include "deep-agent-ga.labels" . | nindent 6 }}
       app.kubernetes.io/component: ui
   template:
     metadata:
       labels:
-        {{- include "deep-research.labels" . | nindent 8 }}
+        {{- include "deep-agent-ga.labels" . | nindent 8 }}
         app.kubernetes.io/component: ui
     spec:
       {{- with .Values.global.imagePullSecrets }}
@@ -26,7 +26,7 @@ spec:
       {{- end }}
       containers:
         - name: ui
-          image: {{ include "deep-research.appImage" (dict "root" $ "image" .Values.ui.image) }}
+          image: {{ include "deep-agent-ga.appImage" (dict "root" $ "image" .Values.ui.image) }}
           imagePullPolicy: {{ .Values.ui.image.pullPolicy }}
           ports:
             - name: http
@@ -37,7 +37,7 @@ spec:
               value: {{ .Values.ui.apiUrl | quote }}
             # nginx reverse-proxy target for /api/* (in-cluster apiserver Service).
             - name: APISERVER_UPSTREAM
-              value: {{ printf "http://%s:%v" (include "deep-research.apiserver.fullname" .) .Values.apiserver.service.port | quote }}
+              value: {{ printf "http://%s:%v" (include "deep-agent-ga.apiserver.fullname" .) .Values.apiserver.service.port | quote }}
           readinessProbe:
             httpGet:
               path: /healthz
@@ -58,12 +58,12 @@ kind: Service
 metadata:
   name: {{ $ui }}
   labels:
-    {{- include "deep-research.labels" . | nindent 4 }}
+    {{- include "deep-agent-ga.labels" . | nindent 4 }}
     app.kubernetes.io/component: ui
 spec:
   type: {{ .Values.ui.service.type }}
   selector:
-    {{- include "deep-research.labels" . | nindent 4 }}
+    {{- include "deep-agent-ga.labels" . | nindent 4 }}
     app.kubernetes.io/component: ui
   ports:
     - name: http
@@ -76,7 +76,7 @@ kind: HorizontalPodAutoscaler
 metadata:
   name: {{ $ui }}
   labels:
-    {{- include "deep-research.labels" . | nindent 4 }}
+    {{- include "deep-agent-ga.labels" . | nindent 4 }}
     app.kubernetes.io/component: ui
 spec:
   scaleTargetRef:

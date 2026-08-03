@@ -15,7 +15,7 @@ A mental model of the React front end, not a line-by-line reading. The goal is t
 - **History reconstruction** — for finished runs, merge persisted checkpoint snapshots with any live tail so each user turn shows the right messages, actions, and subagent cards.
 - **Human-in-the-loop** — render interrupt/permission requests and resume the run with the user's answer.
 
-It delegates the actual transport to a custom hook (`useDeepResearchStream`) and pure projection logic to `selectors.ts`; `App` is the **orchestrator and reconciliation layer**.
+It delegates the actual transport to a custom hook (`useDeepAgentGaStream`) and pure projection logic to `selectors.ts`; `App` is the **orchestrator and reconciliation layer**.
 
 ### Module context
 
@@ -29,7 +29,7 @@ flowchart LR
         CB[callbacks]
         UIcomp[MessageBubble / InputRequests / SubagentCardView]
     end
-    HOOK[useDeepResearchStream\nstream.ts]
+    HOOK[useDeepAgentGaStream\nstream.ts]
     SDK[@langchain/langgraph-sdk\nuseStream]
     SEL[selectors.ts\npure projections]
     API[api.ts\nREST client]
@@ -233,7 +233,7 @@ stateDiagram-v2
 sequenceDiagram
     actor User
     participant App
-    participant Hook as useDeepResearchStream
+    participant Hook as useDeepAgentGaStream
     participant SDK as useStream
     participant BE as Backend
 

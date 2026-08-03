@@ -8,7 +8,7 @@
 Worker/apiserver logs at startup:
 
 ```
-error connecting in 'pool-1': failed to resolve host 'deep-research-postgres': [Errno -2] Name or service not known
+error connecting in 'pool-1': failed to resolve host 'deep-agent-ga-postgres': [Errno -2] Name or service not known
 ...
 psycopg_pool.PoolTimeout: couldn't get a connection after 30.00 sec
 assistant_api.seed_failed  /  research.assistant_store.seed_failed
@@ -21,7 +21,7 @@ Two things:
 1. **Startup ordering.** The apiserver/worker pods were scheduled before the
    Postgres/RabbitMQ pods were Ready. The dependency Services are **headless**
    (clusterIP: None), whose DNS only resolves to *ready* endpoints — so the name
-   `deep-research-postgres` did not resolve at all ("Name or service not known")
+   `deep-agent-ga-postgres` did not resolve at all ("Name or service not known")
    until Postgres was up. Nothing made the app wait.
 
 2. **One-shot seeding at import.** `assistant_api` and `research_runtime` call
@@ -48,9 +48,9 @@ reconnects; the RabbitMQ broker has its own reconnect). The gap was **boot**.
 
 ## Related files
 
-- `deploy/helm/deep-research/templates/_helpers.tpl` (`deep-research.waitForDepsInit`)
-- `deploy/helm/deep-research/templates/{apiserver,worker}.yaml`
-- `deploy/helm/deep-research/values.yaml` (`app.waitForDependencies`)
+- `deploy/helm/deep-agent-ga/templates/_helpers.tpl` (`deep-agent-ga.waitForDepsInit`)
+- `deploy/helm/deep-agent-ga/templates/{apiserver,worker}.yaml`
+- `deploy/helm/deep-agent-ga/values.yaml` (`app.waitForDependencies`)
 - `stream-backend/app/assistant_store_postgres.py`
 
 ## Best practices

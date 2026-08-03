@@ -13,7 +13,7 @@ Where those trace HTTP → Service → Runner → Store/Broker, these trace what
 | 6 | Browse history | [../06](../06-browse-history.md) | [06](06-browse-history.md) |
 | 7 | Manage threads | [../07](../07-manage-threads.md) | [07](07-manage-threads.md) |
 
-Everything lives in one component — [`App()`](../../../ui/src/App.tsx) — plus the [`useDeepResearchStream`](../../../ui/src/stream.ts) custom hook that wraps the SDK's `useStream`. The catalog below assigns a stable id to every effect/memo/function so the per-use-case docs can reference them without re-explaining.
+Everything lives in one component — [`App()`](../../../ui/src/App.tsx) — plus the [`useDeepAgentGaStream`](../../../ui/src/stream.ts) custom hook that wraps the SDK's `useStream`. The catalog below assigns a stable id to every effect/memo/function so the per-use-case docs can reference them without re-explaining.
 
 ---
 
@@ -30,7 +30,7 @@ render (pure)  →  commit (DOM)  →  layout effects  →  paint  →  passive 
 ### Phase A — Render (the `App()` body runs top-to-bottom)
 
 1. **Hooks read state/refs** (`useState`, `useRef`) — lines 557–586.
-2. **The child hook runs**: `useDeepResearchStream(...)` (line 589) executes its own body *inline here* — it registers **ES1** (the protocol SSE effect) and calls the SDK's `useStream`, then returns the memoized stream (**MS1**). Because this call sits above `App`'s own effects, **its effects are registered first** and therefore **run first** in the passive phase.
+2. **The child hook runs**: `useDeepAgentGaStream(...)` (line 589) executes its own body *inline here* — it registers **ES1** (the protocol SSE effect) and calls the SDK's `useStream`, then returns the memoized stream (**MS1**). Because this call sits above `App`'s own effects, **its effects are registered first** and therefore **run first** in the passive phase.
 3. **Ref reassignments run every render**: `switchThreadRef.current = stream.switchThread` and the whole `joinRunStreamRef.current = async (run) => {…}` closure (lines 627–650). This is deliberate — it keeps the "join" logic free of stale closures so effects can call `joinRunStreamRef.current(...)` and always get the latest `stream`.
 4. **Memos evaluate in declaration order** (M1→M8), but each **only recomputes if its dependency array changed** since the last render; otherwise the cached value is returned.
 5. **Plain derived values** (`visibleActiveRun`, `currentRun`, `currentRunStatus`, `currentRunSnapshotLoaded`) are recomputed **every render** — they are not memoized.
@@ -110,6 +110,6 @@ Derived every render (not memoized): `visibleActiveRun` (667), `currentRun` (688
 
 The UI listens to the run on **three** independent channels; understanding which one drives a change is key to reading these flows:
 
-1. **SDK `useStream`** (inside `useDeepResearchStream`) — owns `stream.messages`, `stream.isLoading`, `stream.subagents`, `stream.interrupts`. Populated by `submit`/`joinStream`.
+1. **SDK `useStream`** (inside `useDeepAgentGaStream`) — owns `stream.messages`, `stream.isLoading`, `stream.subagents`, `stream.interrupts`. Populated by `submit`/`joinStream`.
 2. **Protocol SSE — ES1** (`/stream/events`) — raw tools/messages/lifecycle frames → `stream.debugEvents`.
 3. **Lifecycle EventSource — E16** (`/threads/{id}/stream?stream_mode=lifecycle`) — coarse run start/terminal signals for the activeRunMonitor.

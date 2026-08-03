@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Backend image for the Deep Research stream backend.
+# Backend image for the Deep Agent GA stream backend.
 # The SAME image runs two workloads, selected by the container command:
 #   - apiserver: uvicorn app.main:app        (FastAPI HTTP / SSE / WebSocket)
 #   - worker:    celery -A worker.celery_app.celery_app worker

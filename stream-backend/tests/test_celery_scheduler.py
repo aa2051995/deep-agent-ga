@@ -50,7 +50,7 @@ class CelerySchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(scheduled)
         scheduler.app.send_task.assert_called_once()
         call = scheduler.app.send_task.call_args
-        self.assertEqual(call.args[0], "deep_research.run_agent")
+        self.assertEqual(call.args[0], "deep_agent_ga.run_agent")
         self.assertEqual(call.kwargs["kwargs"]["input_value"], {"messages": []})
         self.assertEqual(call.kwargs["kwargs"]["run_record"]["thread_id"], "thread-1")
         self.assertEqual(call.kwargs["kwargs"]["run_record"]["run_id"], "run-1")
@@ -94,7 +94,7 @@ class CelerySchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(resumed)
         scheduler.app.send_task.assert_called_once()
         call = scheduler.app.send_task.call_args
-        self.assertEqual(call.args[0], "deep_research.resume_agent")
+        self.assertEqual(call.args[0], "deep_agent_ga.resume_agent")
         self.assertEqual(call.kwargs["kwargs"]["resume_value"], {"answer": "continue"})
         self.assertIsNotNone(saved)
         self.assertEqual(saved.metadata["worker_backend"], "celery")
@@ -132,8 +132,8 @@ class CeleryTaskRegistrationTests(unittest.TestCase):
     def test_worker_tasks_are_registered_when_app_module_loads(self) -> None:
         from worker.celery_app import celery_app
 
-        self.assertIn("deep_research.run_agent", celery_app.tasks)
-        self.assertIn("deep_research.resume_agent", celery_app.tasks)
+        self.assertIn("deep_agent_ga.run_agent", celery_app.tasks)
+        self.assertIn("deep_agent_ga.resume_agent", celery_app.tasks)
 
 
 class WindowsEventLoopPolicyTests(unittest.TestCase):

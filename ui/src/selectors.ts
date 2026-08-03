@@ -2,7 +2,7 @@ import type { Interrupt } from "@langchain/langgraph-sdk";
 import type { SubagentStreamInterface } from "@langchain/langgraph-sdk/react";
 import { logger } from "./logger";
 import { messageText, toolCallArgs, toolCallName } from "./stream";
-import type { DeepResearchStream } from "./stream";
+import type { DeepAgentGaStream } from "./stream";
 import type { InputRequest, SubagentCard, TodoItem } from "./types";
 
 function formatValue(value: unknown): string {
@@ -91,7 +91,7 @@ export function selectTodosFromValues(values: unknown): TodoItem[] | null {
   return todos;
 }
 
-export function selectTodos(stream: DeepResearchStream): TodoItem[] {
+export function selectTodos(stream: DeepAgentGaStream): TodoItem[] {
   const valueTodos = selectTodosFromValues(stream.values);
   if (valueTodos !== null) {
     return valueTodos;
@@ -100,7 +100,7 @@ export function selectTodos(stream: DeepResearchStream): TodoItem[] {
   return [];
 }
 
-export function selectSubagents(stream: DeepResearchStream): SubagentCard[] {
+export function selectSubagents(stream: DeepAgentGaStream): SubagentCard[] {
   const subagents = stream.subagents ?? new Map();
   const cards = [...subagents.values()].map(subagentStreamToCard);
   logger.debug("selector.subagents", {
@@ -139,7 +139,7 @@ export function subagentStreamToCard(subagent: SubagentStreamInterface): Subagen
   } satisfies SubagentCard;
 }
 
-export function selectInputRequests(stream: DeepResearchStream): InputRequest[] {
+export function selectInputRequests(stream: DeepAgentGaStream): InputRequest[] {
   const requests = (stream.interrupts ?? []).map((interrupt, index) => inputRequestFromInterrupt(interrupt, index));
   // logger.debug("selector.inputRequests", { requests: requests.length });
   return requests;

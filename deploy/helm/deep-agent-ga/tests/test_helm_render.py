@@ -1,4 +1,4 @@
-"""Unit tests for the deep-research Helm chart.
+"""Unit tests for the deep-agent-ga Helm chart.
 
 Render the chart with `helm template` and assert that the env vars wired into the
 apiserver / worker / ui containers exactly match the names and connection formats
@@ -82,13 +82,13 @@ def test_apiserver_backend_wiring(manifests):
     assert env["STREAM_BACKEND_RUNNER_BACKEND"]["value"] == "celery"
     # Connection strings target the in-cluster Service DNS names.
     assert env["STREAM_BACKEND_POSTGRES_URI"]["value"].startswith(
-        "postgresql://postgres:postgres@dr-deep-research-postgres:5432/"
+        "postgresql://postgres:postgres@dr-deep-agent-ga-postgres:5432/"
     )
     assert env["RABBITMQ_STREAM_URL"]["value"] == (
-        "rabbitmq-stream://guest:guest@dr-deep-research-rabbitmq:5552/"
+        "rabbitmq-stream://guest:guest@dr-deep-agent-ga-rabbitmq:5552/"
     )
     assert env["STREAM_BACKEND_CELERY_BROKER_URL"]["value"] == (
-        "amqp://guest:guest@dr-deep-research-rabbitmq:5672//"
+        "amqp://guest:guest@dr-deep-agent-ga-rabbitmq:5672//"
     )
 
 
@@ -100,21 +100,21 @@ def test_worker_shares_backend_wiring_and_runs_celery(manifests):
     assert env["STREAM_BACKEND_CELERY_BROKER_URL"]["value"].startswith("amqp://")
     command = dep["spec"]["template"]["spec"]["containers"][0]["command"]
     assert "celery" in command and "worker.celery_app.celery_app" in command
-    assert "--queues=deep-research-runs" in command
+    assert "--queues=deep-agent-ga-runs" in command
 
 
 def test_api_keys_come_from_secret(manifests):
     env = _env_map(_by(manifests, "Deployment", "apiserver"))
     for key in ("TAVILY_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AWS_SECRET_ACCESS_KEY"):
         ref = env[key]["valueFrom"]["secretKeyRef"]
-        assert ref["name"] == "dr-deep-research-secrets"
+        assert ref["name"] == "dr-deep-agent-ga-secrets"
         assert ref["key"] == key
 
 
 def test_ui_points_at_apiserver_and_serves_same_origin(manifests):
     env = _env_map(_by(manifests, "Deployment", "ui"))
     assert env["API_URL"]["value"] == "/api"
-    assert env["APISERVER_UPSTREAM"]["value"] == "http://dr-deep-research-apiserver:8123"
+    assert env["APISERVER_UPSTREAM"]["value"] == "http://dr-deep-agent-ga-apiserver:8123"
 
 
 def test_rabbitmq_stream_advertised_host_is_service_dns(manifests):
@@ -123,7 +123,7 @@ def test_rabbitmq_stream_advertised_host_is_service_dns(manifests):
         if m.get("kind") == "ConfigMap"
         and m["metadata"]["labels"].get("app.kubernetes.io/component") == "rabbitmq"
     )
-    assert "stream.advertised_host = dr-deep-research-rabbitmq" in cfg["data"]["rabbitmq.conf"]
+    assert "stream.advertised_host = dr-deep-agent-ga-rabbitmq" in cfg["data"]["rabbitmq.conf"]
     assert "rabbitmq_stream" in cfg["data"]["enabled_plugins"]
 
 
@@ -134,18 +134,18 @@ def test_global_registry_only_prefixes_app_images():
     """
     manifests = _render(
         "--set", "global.imageRegistry=553138586148.dkr.ecr.us-east-1.amazonaws.com",
-        "--set", "apiserver.image.repository=deepresrepo",
-        "--set", "worker.image.repository=deepresrepo",
-        "--set", "ui.image.repository=uirepo",
+        "--set", "apiserver.image.repository=deep-agent-ga-backend",
+        "--set", "worker.image.repository=deep-agent-ga-backend",
+        "--set", "ui.image.repository=deep-agent-ga-ui",
     )
 
     def image_of(kind, component):
         return _by(manifests, kind, component)["spec"]["template"]["spec"]["containers"][0]["image"]
 
     reg = "553138586148.dkr.ecr.us-east-1.amazonaws.com"
-    assert image_of("Deployment", "apiserver") == f"{reg}/deepresrepo:latest"
-    assert image_of("Deployment", "worker") == f"{reg}/deepresrepo:latest"
-    assert image_of("Deployment", "ui") == f"{reg}/uirepo:latest"
+    assert image_of("Deployment", "apiserver") == f"{reg}/deep-agent-ga-backend:latest"
+    assert image_of("Deployment", "worker") == f"{reg}/deep-agent-ga-backend:latest"
+    assert image_of("Deployment", "ui") == f"{reg}/deep-agent-ga-ui:latest"
     # Third-party images stay on Docker Hub (no registry prefix).
     assert image_of("StatefulSet", "postgres") == "postgres:16-alpine"
     assert image_of("StatefulSet", "rabbitmq") == "rabbitmq:3.13-management"

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Let a user submit a research question and have the deep-research agent plan the work, search the web, delegate sub-topics to a research subagent, and produce a synthesized answer. This is the system's core action; every other use case supports or extends it.
+Let a user submit a research question and have the deep-agent-ga agent plan the work, search the web, delegate sub-topics to a research subagent, and produce a synthesized answer. This is the system's core action; every other use case supports or extends it.
 
 ## Actors
 

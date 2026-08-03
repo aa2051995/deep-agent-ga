@@ -1,4 +1,4 @@
-"""Deep Research Agent Example.
+"""Deep Agent GA Agent Example.
 
 This module demonstrates building a research agent using the deepagents package
 with custom tools for web search and strategic thinking.

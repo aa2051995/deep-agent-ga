@@ -1,7 +1,7 @@
 # CI/CD — Jenkins on EKS
 
-Continuous delivery for Deep Research: **every merge to `main` builds, pushes,
-and deploys** the app to the `deepres` EKS cluster via the Helm chart; **every
+Continuous delivery for Deep Agent GA: **every merge to `main` builds, pushes,
+and deploys** the app to the `deep-agent-ga` EKS cluster via the Helm chart; **every
 pull request** is validated (lint + render + unit tests + a no-push image build)
 before it can merge.
 
@@ -21,7 +21,7 @@ Jenkins agents run **as pods on the EKS cluster** (Kubernetes plugin). One
 | Concern | Mechanism | Used by |
 |---|---|---|
 | Push images to ECR | **IRSA** role (`eks.amazonaws.com/role-arn` annotation) | the `kaniko` container |
-| Deploy the Helm release | **in-cluster RBAC** (`Role`/`RoleBinding` in `deep-research`) | the `tools` (helm/kubectl) container |
+| Deploy the Helm release | **in-cluster RBAC** (`Role`/`RoleBinding` in `deep-agent-ga`) | the `tools` (helm/kubectl) container |
 
 Because agents run in-cluster, `helm`/`kubectl` use the pod's own in-cluster
 config — **no `aws eks update-kubeconfig`, no kubeconfig file, no IAM user keys**
@@ -30,8 +30,8 @@ pod); kaniko reads ECR credentials straight from the IRSA identity.
 
 ## Image tags
 
-- `REGISTRY/deepresrepo:<git-sha>` and `:latest` — backend (apiserver + worker).
-- `REGISTRY/uirepo:<git-sha>` and `:latest` — UI.
+- `REGISTRY/deep-agent-ga-backend:<git-sha>` and `:latest` — backend (apiserver + worker).
+- `REGISTRY/deep-agent-ga-ui:<git-sha>` and `:latest` — UI.
 
 The deploy pins **`image.tag=<git-sha>`** for all three workloads, so a release
 is reproducible and rollback is `helm rollback` (or re-deploy an older SHA).
@@ -42,27 +42,27 @@ is reproducible and rollback is `helm rollback` (or re-deploy an older SHA).
 ## One-time setup
 
 ### 1. Prerequisites
-- The `deepres` EKS cluster with **IRSA/OIDC enabled**
-  (`eksctl utils associate-iam-oidc-provider --cluster deepres --region us-east-1 --approve`).
+- The `deep-agent-ga` EKS cluster with **IRSA/OIDC enabled**
+  (`eksctl utils associate-iam-oidc-provider --cluster deep-agent-ga --region us-east-1 --approve`).
 - Jenkins running with the **Kubernetes**, **Git**, and **GitHub Branch Source**
   plugins. Jenkins can run in the cluster (recommended) or anywhere that can
   reach the cluster API; the **agents** must run as pods in the cluster.
-- The ECR repos `deepresrepo` and `uirepo` already exist.
-- The `deep-research` namespace already exists (the deploy does not create it).
+- The ECR repos `deep-agent-ga-backend` and `deep-agent-ga-ui` already exist.
+- The `deep-agent-ga` namespace already exists (the deploy does not create it).
 
 ### 2. IAM role for ECR push (IRSA)
 ```bash
 aws iam create-policy \
-  --policy-name DeepResearchJenkinsEcrPush \
+  --policy-name DeepAgentGaJenkinsEcrPush \
   --policy-document file://deploy/cicd/iam-policy-jenkins-ecr.json
 
 # Creates the jenkins-agent ServiceAccount in the `jenkins` namespace AND the
 # IAM role, and wires the IRSA trust/annotation for you:
 eksctl create iamserviceaccount \
-  --cluster deepres --region us-east-1 \
+  --cluster deep-agent-ga --region us-east-1 \
   --namespace jenkins --name jenkins-agent \
-  --role-name deep-research-jenkins-agent \
-  --attach-policy-arn arn:aws:iam::553138586148:policy/DeepResearchJenkinsEcrPush \
+  --role-name deep-agent-ga-jenkins-agent \
+  --attach-policy-arn arn:aws:iam::553138586148:policy/DeepAgentGaJenkinsEcrPush \
   --approve
 ```
 > If your Jenkins agents run in a namespace other than `jenkins`, use it in both
@@ -73,7 +73,7 @@ eksctl create iamserviceaccount \
 kubectl apply -f deploy/cicd/jenkins-agent-serviceaccount.yaml
 ```
 This grants `jenkins-agent` permission to manage the chart's resources (and
-helm's release Secrets) **only** in the `deep-research` namespace. If eksctl
+helm's release Secrets) **only** in the `deep-agent-ga` namespace. If eksctl
 already created the SA, the SA block is a harmless re-declaration that documents
 the required IRSA annotation — the `Role`/`RoleBinding` are the parts that matter.
 
@@ -83,8 +83,8 @@ never live in the repo:
 
 | Credential ID | Value |
 |---|---|
-| `deep-research-tavily-api-key` | `TAVILY_API_KEY` |
-| `deep-research-anthropic-api-key` | `ANTHROPIC_API_KEY` |
+| `deep-agent-ga-tavily-api-key` | `TAVILY_API_KEY` |
+| `deep-agent-ga-anthropic-api-key` | `ANTHROPIC_API_KEY` |
 
 > **Alternative (recommended for prod):** pre-create a Kubernetes Secret with all
 > keys once and set `--set secrets.create=false --set secrets.existingSecret=<name>`
@@ -106,7 +106,7 @@ never live in the repo:
 |---|---|---|---|
 | Setup | all | tools | Compute `IMAGE_TAG=<git-sha>`, set `IS_MAIN`. |
 | Validate | all | tools / python | `helm lint` + `helm template`; pipeline unit tests (`deploy/cicd/tests`). |
-| Chart render tests | all | tools | `pytest deploy/helm/deep-research/tests` (chart wiring). |
+| Chart render tests | all | tools | `pytest deploy/helm/deep-agent-ga/tests` (chart wiring). |
 | Build images | all | kaniko | Build both images; **push** on `main`, `--no-push` on PRs. |
 | Deploy | `main` only | tools | `helm upgrade --install` pinning `image.tag=<git-sha>`, `--wait`. |
 | Verify rollout | `main` only | tools | `kubectl rollout status` for apiserver/worker/ui. |

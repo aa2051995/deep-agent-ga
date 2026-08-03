@@ -1,8 +1,8 @@
-# System Overview — Deep Research Agent
+# System Overview — Deep Agent GA Agent
 
 ## Purpose of the System
 
-The Deep Research Agent is an AI system that conducts autonomous, multi-step web research and streams its reasoning, tool activity, and results back to a user in real time. A user submits a research question; an orchestrator agent plans the work, delegates focused sub-topics to a research subagent, searches the web (Tavily), reflects on findings, and produces a synthesized answer.
+The Deep Agent GA Agent is an AI system that conducts autonomous, multi-step web research and streams its reasoning, tool activity, and results back to a user in real time. A user submits a research question; an orchestrator agent plans the work, delegates focused sub-topics to a research subagent, searches the web (Tavily), reflects on findings, and produces a synthesized answer.
 
 The distinguishing engineering goal is **durable, resumable, real-time streaming of agent execution**. Rather than a fire-and-forget request, every run is:
 
@@ -132,7 +132,7 @@ flowchart TB
 | Module | Responsibility |
 |---|---|
 | `api.ts` | REST client — threads, runs, commands, checkpoints. |
-| `stream.ts` | `useStream` SDK wrapper exposing `DeepResearchStream` (messages, tool calls, todos, debug events). |
+| `stream.ts` | `useStream` SDK wrapper exposing `DeepAgentGaStream` (messages, tool calls, todos, debug events). |
 | `App.tsx`, `selectors.ts`, `types.ts`, `logger.ts` | UI composition, state selection, shared types, structured logging. |
 
 ### Root LangGraph deployment

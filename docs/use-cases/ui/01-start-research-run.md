@@ -113,4 +113,4 @@ sequenceDiagram
 ## Related code
 
 - `ui/src/App.tsx` → `submit`, `onCreated` callback, E2, E2b, E10, E13, E14
-- `ui/src/stream.ts` → `useDeepResearchStream`, `onCreated`, ES1
+- `ui/src/stream.ts` → `useDeepAgentGaStream`, `onCreated`, ES1

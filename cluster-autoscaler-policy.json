@@ -30,7 +30,7 @@
       "Condition": {
         "StringEquals": {
           "aws:ResourceTag/k8s.io/cluster-autoscaler/enabled": "true",
-          "aws:ResourceTag/k8s.io/cluster-autoscaler/deepres": "owned"
+          "aws:ResourceTag/k8s.io/cluster-autoscaler/deep-agent-ga": "owned"
         }
       }
     }

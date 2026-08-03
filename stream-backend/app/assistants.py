@@ -411,7 +411,7 @@ def default_seed_assistants() -> list[AssistantConfig]:
     return [
         AssistantConfig(
             assistant_id="deep-agent",
-            name="Deep Research Agent",
+            name="Deep Agent GA Agent",
             description="Web research orchestrator that delegates to a researcher subagent.",
             model=ModelConfig(
                 provider=provider,

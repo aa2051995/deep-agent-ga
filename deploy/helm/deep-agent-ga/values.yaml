@@ -1,4 +1,4 @@
-# Default values for the deep-research chart.
+# Default values for the deep-agent-ga chart.
 # Every service (postgres, rabbitmq, apiserver, worker, ui) is configured here.
 # For an AWS/EKS-tuned starting point see values-aws.yaml.
 
@@ -24,7 +24,7 @@ app:
   store: postgres            # STREAM_BACKEND_STORE
   eventBroker: rabbitmq      # STREAM_BACKEND_EVENT_BROKER
   runnerBackend: celery      # STREAM_BACKEND_RUNNER_BACKEND (celery => runs execute on the worker)
-  celeryQueue: deep-research-runs   # STREAM_BACKEND_CELERY_QUEUE
+  celeryQueue: deep-agent-ga-runs   # STREAM_BACKEND_CELERY_QUEUE
 
   # Research agent model selection.
   research:
@@ -101,9 +101,9 @@ secrets:
 # -----------------------------------------------------------------------------
 serviceAccount:
   create: false
-  name: "deep-research-bedrock-account"
+  name: "deep-agent-ga-bedrock-account"
   annotations: {}
-    # eks.amazonaws.com/role-arn: arn:aws:iam::<acct>:role/deep-research-bedrock
+    # eks.amazonaws.com/role-arn: arn:aws:iam::<acct>:role/deep-agent-ga-bedrock
 
 # -----------------------------------------------------------------------------
 # PostgreSQL (StatefulSet + headless Service + PVC on EBS)
@@ -191,7 +191,7 @@ rabbitmq:
 # -----------------------------------------------------------------------------
 apiserver:
   image:
-    repository: deepresrepo
+    repository: deep-agent-ga-backend
     tag: latest
     pullPolicy: Always
 
@@ -222,7 +222,7 @@ apiserver:
 # -----------------------------------------------------------------------------
 worker:
   image:
-    repository: deepresrepo
+    repository: deep-agent-ga-backend
     tag: latest
     pullPolicy: Always
 
@@ -251,7 +251,7 @@ worker:
 # -----------------------------------------------------------------------------
 ui:
   image:
-    repository: uirepo
+    repository: deep-agent-ga-ui
     tag: latest
     pullPolicy: Always
 

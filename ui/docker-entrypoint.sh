@@ -8,7 +8,7 @@
 set -eu
 
 : "${API_URL:=/api}"
-: "${APISERVER_UPSTREAM:=http://deep-research-apiserver:8123}"
+: "${APISERVER_UPSTREAM:=http://deep-agent-ga-apiserver:8123}"
 
 # 1) Runtime config the browser reads (window.__API_URL__).
 cat > /usr/share/nginx/html/config.js <<EOF
@@ -21,7 +21,7 @@ cat > /usr/share/nginx/html/__debug.json <<EOF
 EOF
 
 echo "=================================================================="
-echo "deep-research UI container config:"
+echo "deep-agent-ga UI container config:"
 echo "  API_URL (browser window.__API_URL__)      = ${API_URL}"
 echo "  APISERVER_UPSTREAM (nginx /api/ proxy dst) = ${APISERVER_UPSTREAM}"
 echo "  pod                                        = $(hostname)"
@@ -32,12 +32,12 @@ echo "=================================================================="
 i=1
 while [ "$i" -le 3 ]; do
   if body="$(wget -q -T 3 -O - "${APISERVER_UPSTREAM}/health" 2>/dev/null)"; then
-    echo "deep-research: backend health OK  ${APISERVER_UPSTREAM}/health -> ${body}"
+    echo "deep-agent-ga: backend health OK  ${APISERVER_UPSTREAM}/health -> ${body}"
     break
   fi
-  echo "deep-research: backend NOT reachable at ${APISERVER_UPSTREAM}/health (attempt ${i}/3)"
+  echo "deep-agent-ga: backend NOT reachable at ${APISERVER_UPSTREAM}/health (attempt ${i}/3)"
   i=$((i + 1))
   [ "$i" -le 3 ] && sleep 1
 done
 
-echo "deep-research: startup diagnostics done; handing off to nginx"
+echo "deep-agent-ga: startup diagnostics done; handing off to nginx"

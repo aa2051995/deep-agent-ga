@@ -1,6 +1,6 @@
 # User Use Cases
 
-Primary user-facing use cases for the Deep Research Agent, derived from the UI (`ui/src/`) and the backend HTTP surface (`stream-backend/app/main.py`).
+Primary user-facing use cases for the Deep Agent GA Agent, derived from the UI (`ui/src/`) and the backend HTTP surface (`stream-backend/app/main.py`).
 
 | # | Use case | Document |
 |---|---|---|
@@ -15,7 +15,7 @@ Primary user-facing use cases for the Deep Research Agent, derived from the UI (
 
 ## UI execution-flow companions
 
-For each use case above there is a **UI-side** document under [`ui/`](ui/) that traces the React execution flow — the exact order in which render, memos, layout effects, and passive effects run in `App.tsx` / `useDeepResearchStream`, and how each state change cascades into re-renders. Start with the [`ui/README.md`](ui/README.md) primer (the React execution model + a catalog of every effect `E1–E16`/`ES1`, memo `M1–M8`/`MS1`, and key function), then the per-use-case flows [`ui/01`](ui/01-start-research-run.md)–[`ui/07`](ui/07-manage-threads.md).
+For each use case above there is a **UI-side** document under [`ui/`](ui/) that traces the React execution flow — the exact order in which render, memos, layout effects, and passive effects run in `App.tsx` / `useDeepAgentGaStream`, and how each state change cascades into re-renders. Start with the [`ui/README.md`](ui/README.md) primer (the React execution model + a catalog of every effect `E1–E16`/`ES1`, memo `M1–M8`/`MS1`, and key function), then the per-use-case flows [`ui/01`](ui/01-start-research-run.md)–[`ui/07`](ui/07-manage-threads.md).
 
 ## Common actors
 

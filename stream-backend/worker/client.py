@@ -22,7 +22,7 @@ class CeleryRunScheduler:
                 "to use STREAM_BACKEND_RUNNER_BACKEND=celery."
             ) from exc
         self.app = celery_app
-        self.queue = os.getenv("STREAM_BACKEND_CELERY_QUEUE", "deep-research-runs")
+        self.queue = os.getenv("STREAM_BACKEND_CELERY_QUEUE", "deep-agent-ga-runs")
 
     def _result_backend_enabled(self) -> bool:
         try:
@@ -102,7 +102,7 @@ class CeleryRunScheduler:
 
     def enqueue_run(self, run_record: dict[str, Any], input_value: Any = None, task_id: str | None = None) -> str:
         result = self.app.send_task(
-            "deep_research.run_agent",
+            "deep_agent_ga.run_agent",
             kwargs={"run_record": run_record, "input_value": input_value},
             queue=self.queue,
             task_id=task_id,
@@ -112,7 +112,7 @@ class CeleryRunScheduler:
 
     def enqueue_resume(self, run_record: dict[str, Any], resume_value: Any = None, task_id: str | None = None) -> str:
         result = self.app.send_task(
-            "deep_research.resume_agent",
+            "deep_agent_ga.resume_agent",
             kwargs={"run_record": run_record, "resume_value": resume_value},
             queue=self.queue,
             task_id=task_id,

@@ -1,11 +1,11 @@
 {{- if and .Values.rabbitmq.enabled (not .Values.rabbitmq.external.enabled) }}
-{{- $rmq := include "deep-research.rabbitmq.fullname" . -}}
+{{- $rmq := include "deep-agent-ga.rabbitmq.fullname" . -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ $rmq }}-config
   labels:
-    {{- include "deep-research.labels" . | nindent 4 }}
+    {{- include "deep-agent-ga.labels" . | nindent 4 }}
     app.kubernetes.io/component: rabbitmq
 data:
   enabled_plugins: |
@@ -27,12 +27,12 @@ kind: Service
 metadata:
   name: {{ $rmq }}
   labels:
-    {{- include "deep-research.labels" . | nindent 4 }}
+    {{- include "deep-agent-ga.labels" . | nindent 4 }}
     app.kubernetes.io/component: rabbitmq
 spec:
   clusterIP: None
   selector:
-    {{- include "deep-research.labels" . | nindent 4 }}
+    {{- include "deep-agent-ga.labels" . | nindent 4 }}
     app.kubernetes.io/component: rabbitmq
   ports:
     - name: amqp
@@ -50,21 +50,21 @@ kind: StatefulSet
 metadata:
   name: {{ $rmq }}
   labels:
-    {{- include "deep-research.labels" . | nindent 4 }}
+    {{- include "deep-agent-ga.labels" . | nindent 4 }}
     app.kubernetes.io/component: rabbitmq
 spec:
   serviceName: {{ $rmq }}
   replicas: 1
   selector:
     matchLabels:
-      {{- include "deep-research.labels" . | nindent 6 }}
+      {{- include "deep-agent-ga.labels" . | nindent 6 }}
       app.kubernetes.io/component: rabbitmq
   template:
     metadata:
       annotations:
         checksum/config: {{ toYaml .Values.rabbitmq | sha256sum }}
       labels:
-        {{- include "deep-research.labels" . | nindent 8 }}
+        {{- include "deep-agent-ga.labels" . | nindent 8 }}
         app.kubernetes.io/component: rabbitmq
     spec:
       {{- with .Values.global.imagePullSecrets }}
@@ -73,7 +73,7 @@ spec:
       {{- end }}
       containers:
         - name: rabbitmq
-          image: {{ include "deep-research.image" (dict "root" $ "image" .Values.rabbitmq.image) }}
+          image: {{ include "deep-agent-ga.image" (dict "root" $ "image" .Values.rabbitmq.image) }}
           imagePullPolicy: {{ .Values.rabbitmq.image.pullPolicy }}
           ports:
             - name: amqp
@@ -106,7 +106,7 @@ spec:
               mountPath: /etc/rabbitmq/enabled_plugins
               subPath: enabled_plugins
             - name: config
-              mountPath: /etc/rabbitmq/conf.d/10-deep-research.conf
+              mountPath: /etc/rabbitmq/conf.d/10-deep-agent-ga.conf
               subPath: rabbitmq.conf
             - name: data
               mountPath: /var/lib/rabbitmq

@@ -306,7 +306,7 @@ export async function startRun(
         input: { messages: [{ type: "human", content }] },
         multitaskStrategy: "reject",
         config: { configurable: { thread_id: threadId } },
-        metadata: { surface: "deep-research-ui" },
+        metadata: { surface: "deep-agent-ga-ui" },
       },
     }),
   });
@@ -340,7 +340,7 @@ export async function respondToInput(
         assistant_id: ASSISTANT_ID,
         responses: [{ id: requestId, value: responseValue }],
         config: { configurable: { thread_id: threadId } },
-        metadata: { surface: "deep-research-ui" },
+        metadata: { surface: "deep-agent-ga-ui" },
       },
     }),
   });

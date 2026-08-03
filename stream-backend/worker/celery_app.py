@@ -31,14 +31,14 @@ def celery_result_backend() -> str | None:
 
 
 celery_app = Celery(
-    "deep_research_worker",
+    "deep_agent_ga_worker",
     broker=celery_broker_url(),
     backend=celery_result_backend(),
     include=["worker.tasks"],
 )
 celery_app.conf.update(
     imports=("worker.tasks",),
-    task_default_queue=os.getenv("STREAM_BACKEND_CELERY_QUEUE", "deep-research-runs"),
+    task_default_queue=os.getenv("STREAM_BACKEND_CELERY_QUEUE", "deep-agent-ga-runs"),
     task_default_queue_type="quorum",
     task_default_exchange="celery_topic",
     task_default_exchange_type="topic",

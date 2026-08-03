@@ -2,9 +2,9 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "deep-research.assistantsClaimName" . }}
+  name: {{ include "deep-agent-ga.assistantsClaimName" . }}
   labels:
-    {{- include "deep-research.labels" . | nindent 4 }}
+    {{- include "deep-agent-ga.labels" . | nindent 4 }}
     app.kubernetes.io/component: assistants-store
 spec:
   accessModes:

@@ -1,14 +1,14 @@
-# Deploying Deep Research to Kubernetes (EKS)
+# Deploying Deep Agent GA to Kubernetes (EKS)
 
-A Helm chart (`deploy/helm/deep-research`) deploys the whole system to Kubernetes:
+A Helm chart (`deploy/helm/deep-agent-ga`) deploys the whole system to Kubernetes:
 
 | Component  | Kind          | Image                     | Autoscaling |
 |------------|---------------|---------------------------|-------------|
 | postgres   | StatefulSet   | `postgres:16-alpine`      | no (stateful) |
 | rabbitmq   | StatefulSet   | `rabbitmq:3.13-management`| no (stateful) |
-| apiserver  | Deployment    | `deep-research-backend`   | HPA (CPU/mem) |
-| worker     | Deployment    | `deep-research-backend`   | HPA (CPU/mem) |
-| ui         | Deployment    | `deep-research-ui`        | HPA (CPU) |
+| apiserver  | Deployment    | `deep-agent-ga-backend`   | HPA (CPU/mem) |
+| worker     | Deployment    | `deep-agent-ga-backend`   | HPA (CPU/mem) |
+| ui         | Deployment    | `deep-agent-ga-ui`        | HPA (CPU) |
 
 The apiserver and worker share **one** backend image (`stream-backend/Dockerfile`),
 differing only by container command. The UI image (`ui/Dockerfile`) is nginx
@@ -43,7 +43,7 @@ Key env (identical on apiserver + worker):
 | `RABBITMQ_STREAM_URL` | `rabbitmq-stream://<user>:<pass>@<release>-rabbitmq:5552/` |
 | `STREAM_BACKEND_RUNNER_BACKEND` | `celery` |
 | `STREAM_BACKEND_CELERY_BROKER_URL` | `amqp://<user>:<pass>@<release>-rabbitmq:5672//` |
-| `STREAM_BACKEND_CELERY_QUEUE` | `deep-research-runs` |
+| `STREAM_BACKEND_CELERY_QUEUE` | `deep-agent-ga-runs` |
 | API keys (`TAVILY_API_KEY`, `ANTHROPIC_API_KEY`, …) | from the chart Secret |
 
 RabbitMQ enables the `rabbitmq_stream` plugin and sets
@@ -78,16 +78,16 @@ export REGION=us-east-1
 aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $REGISTRY
 
 # Create the repos once (skip if they already exist)
-aws ecr create-repository --repository-name deepresrepo --region $REGION || true
-aws ecr create-repository --repository-name uirepo --region $REGION || true
+aws ecr create-repository --repository-name deep-agent-ga-backend --region $REGION || true
+aws ecr create-repository --repository-name deep-agent-ga-ui --region $REGION || true
 
 # Backend (apiserver + worker) — build context is stream-backend/
-docker build -t $REGISTRY/deepresrepo:latest stream-backend
-docker push $REGISTRY/deepresrepo:latest
+docker build -t $REGISTRY/deep-agent-ga-backend:latest stream-backend
+docker push $REGISTRY/deep-agent-ga-backend:latest
 
 # UI — build context is ui/
-docker build -t $REGISTRY/uirepo:latest ui
-docker push $REGISTRY/uirepo:latest
+docker build -t $REGISTRY/deep-agent-ga-ui:latest ui
+docker push $REGISTRY/deep-agent-ga-ui:latest
 ```
 
 > Only the **app** images (apiserver/worker/ui) go to your ECR. postgres and
@@ -99,9 +99,9 @@ docker push $REGISTRY/uirepo:latest
 ## 2. Install
 
 ```bash
-helm upgrade --install deep-research deploy/helm/deep-research \
-  -n deep-research --create-namespace \
-  -f deploy/helm/deep-research/values-aws.yaml \
+helm upgrade --install deep-agent-ga deploy/helm/deep-agent-ga \
+  -n deep-agent-ga --create-namespace \
+  -f deploy/helm/deep-agent-ga/values-aws.yaml \
   --set global.imageRegistry=$REGISTRY \
   --set-string secrets.tavilyApiKey=$TAVILY_API_KEY \
   --set-string secrets.anthropicApiKey=$ANTHROPIC_API_KEY
@@ -114,14 +114,14 @@ Prefer **IRSA** for Bedrock over static keys: set
 ## 3. Reach the app
 
 ```bash
-kubectl get ingress -n deep-research
+kubectl get ingress -n deep-agent-ga
 # open the ALB hostname, or set ingress.host to your DNS name
 ```
 
 No ingress? Port-forward the UI:
 
 ```bash
-kubectl port-forward -n deep-research svc/deep-research-ui 8080:80
+kubectl port-forward -n deep-agent-ga svc/deep-agent-ga-ui 8080:80
 # http://localhost:8080
 ```
 
@@ -133,19 +133,19 @@ The UI container ships built-in diagnostics.
 the backend from inside the pod:
 
 ```bash
-kubectl logs deploy/deep-research-ui -n <ns> | head -20
-# deep-research UI container config:
+kubectl logs deploy/deep-agent-ga-ui -n <ns> | head -20
+# deep-agent-ga UI container config:
 #   API_URL (browser window.__API_URL__)      = /api
-#   APISERVER_UPSTREAM (nginx /api/ proxy dst) = http://deep-research-apiserver:8123
+#   APISERVER_UPSTREAM (nginx /api/ proxy dst) = http://deep-agent-ga-apiserver:8123
 #   ...
-# deep-research: backend health OK  http://deep-research-apiserver:8123/health -> {"status":"ok"}
+# deep-agent-ga: backend health OK  http://deep-agent-ga-apiserver:8123/health -> {"status":"ok"}
 ```
 
 **Per-request access log** shows which upstream each `/api/*` call hit and its
 status — so you can see requests actually reaching the apiserver:
 
 ```bash
-kubectl logs -f deploy/deep-research-ui -n <ns>
+kubectl logs -f deploy/deep-agent-ga-ui -n <ns>
 # ... "POST /api/threads/search HTTP/1.1" status=200 upstream=10.0.1.23:8123 upstream_status=200 ...
 ```
 
@@ -166,7 +166,7 @@ curl http://<elb-host>/__api_health      # 200 {"status":"ok"} == proxy path wor
 **Browser console** logs a one-time banner on load:
 
 ```
-[deep-research] api-base=http://<elb>/api  __API_URL__="/api"  origin=http://<elb>  randomUUID=available
+[deep-agent-ga] api-base=http://<elb>/api  __API_URL__="/api"  origin=http://<elb>  randomUUID=available
 ```
 
 If `randomUUID=MISSING` you're on an insecure origin without the polyfill (rebuild
@@ -175,12 +175,12 @@ the UI image); if `api-base` points at `localhost:2024`, `config.js` didn't load
 **Backend side** — the apiserver logs its resolved stores/brokers at startup:
 
 ```bash
-kubectl logs deploy/deep-research-apiserver -n <ns> | grep -E "repository.create|event_broker|assistants"
+kubectl logs deploy/deep-agent-ga-apiserver -n <ns> | grep -E "repository.create|event_broker|assistants"
 ```
 
 ## Configuration reference
 
-All knobs live in [`helm/deep-research/values.yaml`](helm/deep-research/values.yaml)
+All knobs live in [`helm/deep-agent-ga/values.yaml`](helm/deep-agent-ga/values.yaml)
 (commented). Common ones:
 
 - `postgres.external.enabled` / `connectionUrl` — use RDS instead of the in-cluster DB.
@@ -227,5 +227,5 @@ rebuilding), and runtime UI edits are per-pod and lost on restart.
 The chart has render tests (`helm template` + assertions on the wiring):
 
 ```bash
-python -m pytest deploy/helm/deep-research/tests -q   # use the `dra` conda env
+python -m pytest deploy/helm/deep-agent-ga/tests -q   # use the `dra` conda env
 ```

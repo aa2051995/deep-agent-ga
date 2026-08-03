@@ -6,7 +6,7 @@
 ## 1. Worker: `set_wakeup_fd only works in main thread of the main interpreter`
 
 ```
-Task deep_research.run_agent[...] raised unexpected: RuntimeError(
+Task deep_agent_ga.run_agent[...] raised unexpected: RuntimeError(
   'set_wakeup_fd only works in main thread of the main interpreter')
   File "/app/worker/tasks.py", line 77, in setup_signal_handlers
     loop.add_signal_handler(sig, ...)

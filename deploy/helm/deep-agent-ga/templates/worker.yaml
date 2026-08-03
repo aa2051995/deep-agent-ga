@@ -1,10 +1,10 @@
-{{- $worker := include "deep-research.worker.fullname" . -}}
+{{- $worker := include "deep-agent-ga.worker.fullname" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ $worker }}
   labels:
-    {{- include "deep-research.labels" . | nindent 4 }}
+    {{- include "deep-agent-ga.labels" . | nindent 4 }}
     app.kubernetes.io/component: worker
 spec:
   {{- if not .Values.worker.autoscaling.enabled }}
@@ -12,17 +12,17 @@ spec:
   {{- end }}
   selector:
     matchLabels:
-      {{- include "deep-research.labels" . | nindent 6 }}
+      {{- include "deep-agent-ga.labels" . | nindent 6 }}
       app.kubernetes.io/component: worker
   template:
     metadata:
       annotations:
         checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
       labels:
-        {{- include "deep-research.labels" . | nindent 8 }}
+        {{- include "deep-agent-ga.labels" . | nindent 8 }}
         app.kubernetes.io/component: worker
     spec:
-      serviceAccountName: {{ include "deep-research.serviceAccountName" . }}
+      serviceAccountName: {{ include "deep-agent-ga.serviceAccountName" . }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -32,13 +32,13 @@ spec:
       {{- if or $wait .Values.app.assistantsStore.persistence.enabled }}
       initContainers:
         {{- if $wait }}
-        {{- include "deep-research.waitForDepsInit" (dict "root" $ "image" .Values.worker.image) | nindent 8 }}
+        {{- include "deep-agent-ga.waitForDepsInit" (dict "root" $ "image" .Values.worker.image) | nindent 8 }}
         {{- end }}
-        {{- include "deep-research.assistantsInitContainer" (dict "root" $ "image" .Values.worker.image) | nindent 8 }}
+        {{- include "deep-agent-ga.assistantsInitContainer" (dict "root" $ "image" .Values.worker.image) | nindent 8 }}
       {{- end }}
       containers:
         - name: worker
-          image: {{ include "deep-research.appImage" (dict "root" $ "image" .Values.worker.image) }}
+          image: {{ include "deep-agent-ga.appImage" (dict "root" $ "image" .Values.worker.image) }}
           imagePullPolicy: {{ .Values.worker.image.pullPolicy }}
           command:
             - celery
@@ -51,7 +51,7 @@ spec:
             - --concurrency={{ .Values.worker.concurrency }}
             - --queues={{ .Values.app.celeryQueue }}
           env:
-            {{- include "deep-research.backendEnv" . | nindent 12 }}
+            {{- include "deep-agent-ga.backendEnv" . | nindent 12 }}
           # Liveness: the worker responds to a Celery control ping.
           livenessProbe:
             exec:
@@ -64,11 +64,11 @@ spec:
             {{- toYaml .Values.worker.resources | nindent 12 }}
           {{- if .Values.app.assistantsStore.persistence.enabled }}
           volumeMounts:
-            {{- include "deep-research.assistantsVolumeMount" . | nindent 12 }}
+            {{- include "deep-agent-ga.assistantsVolumeMount" . | nindent 12 }}
           {{- end }}
       {{- if .Values.app.assistantsStore.persistence.enabled }}
       volumes:
-        {{- include "deep-research.assistantsVolume" . | nindent 8 }}
+        {{- include "deep-agent-ga.assistantsVolume" . | nindent 8 }}
       {{- end }}
 {{- if .Values.worker.autoscaling.enabled }}
 ---
@@ -77,7 +77,7 @@ kind: HorizontalPodAutoscaler
 metadata:
   name: {{ $worker }}
   labels:
-    {{- include "deep-research.labels" . | nindent 4 }}
+    {{- include "deep-agent-ga.labels" . | nindent 4 }}
     app.kubernetes.io/component: worker
 spec:
   scaleTargetRef:

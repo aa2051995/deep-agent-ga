@@ -118,7 +118,7 @@ def test_rolebinding_targets_the_agent_sa():
     subj = rb["subjects"][0]
     assert subj["kind"] == "ServiceAccount"
     assert subj["name"] == sa["metadata"]["name"]
-    assert rb["roleRef"]["name"] == "deep-research-deployer"
+    assert rb["roleRef"]["name"] == "deep-agent-ga-deployer"
 
 
 # --------------------------------------------------------------------------- #
@@ -139,5 +139,5 @@ def test_iam_policy_allows_ecr_push():
     assert "ecr:PutImage" in actions
     assert "ecr:UploadLayerPart" in actions
     # Push scoped to the two app repositories.
-    assert any(r.endswith("repository/deepresrepo") for r in resources)
-    assert any(r.endswith("repository/uirepo") for r in resources)
+    assert any(r.endswith("repository/deep-agent-ga-backend") for r in resources)
+    assert any(r.endswith("repository/deep-agent-ga-ui") for r in resources)

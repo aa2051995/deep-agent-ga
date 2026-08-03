@@ -130,14 +130,14 @@ For each state: **updaters** (setter call sites), **readers**, **effects that de
 
 ### 1. `apiUrl`
 - **Updated by:** `setApiUrl` — sidebar API `<input>` `onChange` only.
-- **Read by:** `useDeepResearchStream`, all `fetch` calls, `fetchRunActive`/`fetchRunStatus`, E8/E9/E10/E12/E16, render.
+- **Read by:** `useDeepAgentGaStream`, all `fetch` calls, `fetchRunActive`/`fetchRunStatus`, E8/E9/E10/E12/E16, render.
 - **Effects depending:** E8, E9, E10, E12, E16.
 - **Memos depending:** none directly (reaches memos only via the `stream` object).
 - **Callbacks modifying:** none (inline setter).
 
 ### 2. `threadId`
 - **Updated by:** `setThreadId` — `onThreadId` cb, `resetVisibleThread`, E11 (popstate), E16 (404 self-heal).
-- **Read by:** `useDeepResearchStream`, `visibleActiveRun`, `currentRun`, `refreshRuns`, `submit`, E5/E7/E9/E13/E15/E16, render.
+- **Read by:** `useDeepAgentGaStream`, `visibleActiveRun`, `currentRun`, `refreshRuns`, `submit`, E5/E7/E9/E13/E15/E16, render.
 - **Effects depending:** E5, E9, E13, E15, E16.
 - **Memos depending:** M4 (and M3 via `visibleActiveRun`).
 - **Callbacks modifying:** `resetVisibleThread` (via `newThread`/`openThread`/`removeThread`).

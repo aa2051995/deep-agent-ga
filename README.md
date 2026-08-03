@@ -1,4 +1,4 @@
-# 🚀 Deep Research
+# 🚀 Deep Agent GA
 
 ## 🚀 Quickstart
 
@@ -8,7 +8,7 @@
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-Ensure you are in the `deep_research` directory:
+Ensure you are in the `deep_agent_ga` directory:
 
 ```bash
 cd examples/deep_research
@@ -68,7 +68,7 @@ This provides a user-friendly chat interface and visualization of files in state
 
 <img width="2039" height="1495" alt="Screenshot 2025-11-17 at 1 11 27 PM" src="https://github.com/user-attachments/assets/d559876b-4c90-46fb-8e70-c16c93793fa8" />
 
-### Option 3: Local Deep Research UI
+### Option 3: Local Deep Agent GA UI
 
 This example also includes a React UI in `ui/` that connects to the local
 stream backend with `@langchain/langgraph-sdk/react` `useStream`.
@@ -105,7 +105,7 @@ should join, wait, cancel, or switch to a new thread.
 
 ## 📚 Resources
 
-- **[Deep Research Course](https://academy.langchain.com/courses/deep-research-with-langgraph)** - Full course on deep research with LangGraph
+- **[Deep Agent GA Course](https://academy.langchain.com/courses/deep-agent-ga-with-langgraph)** - Full course on deep research with LangGraph
 
 ### Custom Model
 

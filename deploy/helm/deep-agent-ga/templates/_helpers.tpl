@@ -1,9 +1,9 @@
 {{/* Chart name / fullname helpers */}}
-{{- define "deep-research.name" -}}
+{{- define "deep-agent-ga.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- define "deep-research.fullname" -}}
+{{- define "deep-agent-ga.fullname" -}}
 {{- if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
@@ -16,43 +16,43 @@
 {{- end -}}
 {{- end -}}
 
-{{- define "deep-research.labels" -}}
-app.kubernetes.io/name: {{ include "deep-research.name" . }}
+{{- define "deep-agent-ga.labels" -}}
+app.kubernetes.io/name: {{ include "deep-agent-ga.name" . }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
 {{/* Component-scoped names */}}
-{{- define "deep-research.postgres.fullname" -}}{{ printf "%s-postgres" (include "deep-research.fullname" .) }}{{- end -}}
-{{- define "deep-research.rabbitmq.fullname" -}}{{ printf "%s-rabbitmq" (include "deep-research.fullname" .) }}{{- end -}}
-{{- define "deep-research.apiserver.fullname" -}}{{ printf "%s-apiserver" (include "deep-research.fullname" .) }}{{- end -}}
-{{- define "deep-research.worker.fullname" -}}{{ printf "%s-worker" (include "deep-research.fullname" .) }}{{- end -}}
-{{- define "deep-research.ui.fullname" -}}{{ printf "%s-ui" (include "deep-research.fullname" .) }}{{- end -}}
+{{- define "deep-agent-ga.postgres.fullname" -}}{{ printf "%s-postgres" (include "deep-agent-ga.fullname" .) }}{{- end -}}
+{{- define "deep-agent-ga.rabbitmq.fullname" -}}{{ printf "%s-rabbitmq" (include "deep-agent-ga.fullname" .) }}{{- end -}}
+{{- define "deep-agent-ga.apiserver.fullname" -}}{{ printf "%s-apiserver" (include "deep-agent-ga.fullname" .) }}{{- end -}}
+{{- define "deep-agent-ga.worker.fullname" -}}{{ printf "%s-worker" (include "deep-agent-ga.fullname" .) }}{{- end -}}
+{{- define "deep-agent-ga.ui.fullname" -}}{{ printf "%s-ui" (include "deep-agent-ga.fullname" .) }}{{- end -}}
 
-{{- define "deep-research.serviceAccountName" -}}
+{{- define "deep-agent-ga.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
-{{- default (include "deep-research.fullname" .) .Values.serviceAccount.name -}}
+{{- default (include "deep-agent-ga.fullname" .) .Values.serviceAccount.name -}}
 {{- else -}}
 {{- default "default" .Values.serviceAccount.name -}}
 {{- end -}}
 {{- end -}}
 
-{{- define "deep-research.assistantsClaimName" -}}
+{{- define "deep-agent-ga.assistantsClaimName" -}}
 {{- if .Values.app.assistantsStore.persistence.existingClaim -}}
 {{- .Values.app.assistantsStore.persistence.existingClaim -}}
 {{- else -}}
-{{- printf "%s-assistants" (include "deep-research.fullname" .) -}}
+{{- printf "%s-assistants" (include "deep-agent-ga.fullname" .) -}}
 {{- end -}}
 {{- end -}}
 
-{{- define "deep-research.secretName" -}}
-{{- if .Values.secrets.existingSecret -}}{{ .Values.secrets.existingSecret }}{{- else -}}{{ printf "%s-secrets" (include "deep-research.fullname" .) }}{{- end -}}
+{{- define "deep-agent-ga.secretName" -}}
+{{- if .Values.secrets.existingSecret -}}{{ .Values.secrets.existingSecret }}{{- else -}}{{ printf "%s-secrets" (include "deep-agent-ga.fullname" .) }}{{- end -}}
 {{- end -}}
 
 {{/* App image (apiserver / worker / ui): lives in your registry, so it gets the
      global.imageRegistry prefix (e.g. your ECR). A per-image `registry` still wins. */}}
-{{- define "deep-research.appImage" -}}
+{{- define "deep-agent-ga.appImage" -}}
 {{- $registry := .image.registry | default .root.Values.global.imageRegistry -}}
 {{- if $registry -}}
 {{- printf "%s/%s:%s" $registry .image.repository .image.tag -}}
@@ -65,7 +65,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
      NOT from your app registry. Set the per-image `registry` to mirror it into
      your own registry (e.g. an ECR pull-through cache). global.imageRegistry is
      intentionally ignored here so it can't redirect these to your ECR. */}}
-{{- define "deep-research.image" -}}
+{{- define "deep-agent-ga.image" -}}
 {{- $registry := .image.registry | default "" -}}
 {{- if $registry -}}
 {{- printf "%s/%s:%s" $registry .image.repository .image.tag -}}
@@ -80,10 +80,10 @@ disabled, so the parent pod spec stays valid. The init container seeds the
 image's baked-in assistants into the shared volume the first time only, so
 existing/edited assistants are never overwritten on restart.
 --------------------------------------------------------------------------- */}}
-{{- define "deep-research.assistantsInitContainer" -}}
+{{- define "deep-agent-ga.assistantsInitContainer" -}}
 {{- if .root.Values.app.assistantsStore.persistence.enabled }}
 - name: seed-assistants
-  image: {{ include "deep-research.appImage" (dict "root" .root "image" .image) }}
+  image: {{ include "deep-agent-ga.appImage" (dict "root" .root "image" .image) }}
   imagePullPolicy: {{ .image.pullPolicy }}
   command:
     - sh
@@ -107,19 +107,19 @@ existing/edited assistants are never overwritten on restart.
 {{/* Init container that blocks until the in-cluster dependencies accept TCP.
      Emits nothing when there are no in-cluster deps to wait for (e.g. all
      external). Uses the app image (already pulled) + a plain socket check. */}}
-{{- define "deep-research.waitForDepsInit" -}}
+{{- define "deep-agent-ga.waitForDepsInit" -}}
 {{- $root := .root -}}
 {{- $targets := list -}}
 {{- if and $root.Values.postgres.enabled (not $root.Values.postgres.external.enabled) -}}
-{{- $targets = append $targets (printf "(%q, %v)" (include "deep-research.postgres.fullname" $root) $root.Values.postgres.service.port) -}}
+{{- $targets = append $targets (printf "(%q, %v)" (include "deep-agent-ga.postgres.fullname" $root) $root.Values.postgres.service.port) -}}
 {{- end -}}
 {{- if and $root.Values.rabbitmq.enabled (not $root.Values.rabbitmq.external.enabled) -}}
-{{- $targets = append $targets (printf "(%q, %v)" (include "deep-research.rabbitmq.fullname" $root) $root.Values.rabbitmq.ports.amqp) -}}
-{{- $targets = append $targets (printf "(%q, %v)" (include "deep-research.rabbitmq.fullname" $root) $root.Values.rabbitmq.ports.stream) -}}
+{{- $targets = append $targets (printf "(%q, %v)" (include "deep-agent-ga.rabbitmq.fullname" $root) $root.Values.rabbitmq.ports.amqp) -}}
+{{- $targets = append $targets (printf "(%q, %v)" (include "deep-agent-ga.rabbitmq.fullname" $root) $root.Values.rabbitmq.ports.stream) -}}
 {{- end -}}
 {{- if $targets }}
 - name: wait-for-deps
-  image: {{ include "deep-research.appImage" (dict "root" $root "image" .image) }}
+  image: {{ include "deep-agent-ga.appImage" (dict "root" $root "image" .image) }}
   imagePullPolicy: {{ .image.pullPolicy }}
   command:
     - python
@@ -143,18 +143,18 @@ existing/edited assistants are never overwritten on restart.
 {{- end }}
 {{- end -}}
 
-{{- define "deep-research.assistantsVolumeMount" -}}
+{{- define "deep-agent-ga.assistantsVolumeMount" -}}
 {{- if .Values.app.assistantsStore.persistence.enabled }}
 - name: assistants
   mountPath: {{ .Values.app.assistantsStore.mountPath }}
 {{- end }}
 {{- end -}}
 
-{{- define "deep-research.assistantsVolume" -}}
+{{- define "deep-agent-ga.assistantsVolume" -}}
 {{- if .Values.app.assistantsStore.persistence.enabled }}
 - name: assistants
   persistentVolumeClaim:
-    claimName: {{ include "deep-research.assistantsClaimName" . }}
+    claimName: {{ include "deep-agent-ga.assistantsClaimName" . }}
 {{- end }}
 {{- end -}}
 
@@ -162,46 +162,46 @@ existing/edited assistants are never overwritten on restart.
 Connection strings (used by apiserver + worker). External endpoints win; otherwise
 point at the in-cluster Services.
 --------------------------------------------------------------------------- */}}
-{{- define "deep-research.postgresUri" -}}
+{{- define "deep-agent-ga.postgresUri" -}}
 {{- if .Values.postgres.external.enabled -}}
 {{- .Values.postgres.external.connectionUrl -}}
 {{- else -}}
-{{- printf "postgresql://%s:%s@%s:%v/%s" .Values.postgres.auth.username .Values.postgres.auth.password (include "deep-research.postgres.fullname" .) .Values.postgres.service.port .Values.postgres.auth.database -}}
+{{- printf "postgresql://%s:%s@%s:%v/%s" .Values.postgres.auth.username .Values.postgres.auth.password (include "deep-agent-ga.postgres.fullname" .) .Values.postgres.service.port .Values.postgres.auth.database -}}
 {{- end -}}
 {{- end -}}
 
-{{- define "deep-research.celeryBrokerUrl" -}}
+{{- define "deep-agent-ga.celeryBrokerUrl" -}}
 {{- if .Values.rabbitmq.external.enabled -}}
 {{- .Values.rabbitmq.external.amqpUrl -}}
 {{- else -}}
-{{- printf "amqp://%s:%s@%s:%v//" .Values.rabbitmq.auth.username .Values.rabbitmq.auth.password (include "deep-research.rabbitmq.fullname" .) .Values.rabbitmq.ports.amqp -}}
+{{- printf "amqp://%s:%s@%s:%v//" .Values.rabbitmq.auth.username .Values.rabbitmq.auth.password (include "deep-agent-ga.rabbitmq.fullname" .) .Values.rabbitmq.ports.amqp -}}
 {{- end -}}
 {{- end -}}
 
-{{- define "deep-research.rabbitmqStreamUrl" -}}
+{{- define "deep-agent-ga.rabbitmqStreamUrl" -}}
 {{- if .Values.rabbitmq.external.enabled -}}
 {{- .Values.rabbitmq.external.streamUrl -}}
 {{- else -}}
-{{- printf "rabbitmq-stream://%s:%s@%s:%v/" .Values.rabbitmq.auth.username .Values.rabbitmq.auth.password (include "deep-research.rabbitmq.fullname" .) .Values.rabbitmq.ports.stream -}}
+{{- printf "rabbitmq-stream://%s:%s@%s:%v/" .Values.rabbitmq.auth.username .Values.rabbitmq.auth.password (include "deep-agent-ga.rabbitmq.fullname" .) .Values.rabbitmq.ports.stream -}}
 {{- end -}}
 {{- end -}}
 
 {{/* ---------------------------------------------------------------------------
 Shared env for apiserver + worker: non-secret from ConfigMap, secret from Secret.
 --------------------------------------------------------------------------- */}}
-{{- define "deep-research.backendEnv" -}}
+{{- define "deep-agent-ga.backendEnv" -}}
 - name: STREAM_BACKEND_STORE
   value: {{ .Values.app.store | quote }}
 - name: STREAM_BACKEND_POSTGRES_URI
-  value: {{ include "deep-research.postgresUri" . | quote }}
+  value: {{ include "deep-agent-ga.postgresUri" . | quote }}
 - name: STREAM_BACKEND_EVENT_BROKER
   value: {{ .Values.app.eventBroker | quote }}
 - name: RABBITMQ_STREAM_URL
-  value: {{ include "deep-research.rabbitmqStreamUrl" . | quote }}
+  value: {{ include "deep-agent-ga.rabbitmqStreamUrl" . | quote }}
 - name: STREAM_BACKEND_RUNNER_BACKEND
   value: {{ .Values.app.runnerBackend | quote }}
 - name: STREAM_BACKEND_CELERY_BROKER_URL
-  value: {{ include "deep-research.celeryBrokerUrl" . | quote }}
+  value: {{ include "deep-agent-ga.celeryBrokerUrl" . | quote }}
 - name: STREAM_BACKEND_CELERY_QUEUE
   value: {{ .Values.app.celeryQueue | quote }}
 - name: STREAM_BACKEND_RABBITMQ_MAX_AGE_HOURS
@@ -236,7 +236,7 @@ Shared env for apiserver + worker: non-secret from ConfigMap, secret from Secret
 - name: {{ $key }}
   value: {{ $value | quote }}
 {{- end }}
-{{- $secret := include "deep-research.secretName" . }}
+{{- $secret := include "deep-agent-ga.secretName" . }}
 {{- range $env, $key := dict "TAVILY_API_KEY" "tavilyApiKey" "GOOGLE_API_KEY" "googleApiKey" "ANTHROPIC_API_KEY" "anthropicApiKey" "OPENAI_API_KEY" "openaiApiKey" "LANGSMITH_API_KEY" "langsmithApiKey" "AWS_ACCESS_KEY_ID" "awsAccessKeyId" "AWS_SECRET_ACCESS_KEY" "awsSecretAccessKey" "AWS_SESSION_TOKEN" "awsSessionToken" }}
 - name: {{ $env }}
   valueFrom:

@@ -80,7 +80,7 @@ export const BUILD_ID =
 if (typeof window !== "undefined") {
   // eslint-disable-next-line no-console
   console.info(
-    "[deep-research] build=%s  api-base=%s  __API_URL__=%o  origin=%s  randomUUID=%s",
+    "[deep-agent-ga] build=%s  api-base=%s  __API_URL__=%o  origin=%s  randomUUID=%s",
     BUILD_ID,
     DEFAULT_API_URL,
     window.__API_URL__,

@@ -75,7 +75,7 @@ class PostgresAssistantStore:
         self._scratch = (
             Path(scratch_dir)
             if scratch_dir is not None
-            else Path(tempfile.gettempdir()) / "deep-research-assistants"
+            else Path(tempfile.gettempdir()) / "deep-agent-ga-assistants"
         )
         self._scratch.mkdir(parents=True, exist_ok=True)
         # assistant_id -> updated_at last written to the scratch dir.

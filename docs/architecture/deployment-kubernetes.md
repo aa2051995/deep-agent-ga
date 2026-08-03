@@ -1,7 +1,7 @@
 # Deployment Architecture — Kubernetes / EKS
 
-This document describes how the Deep Research system is deployed to Kubernetes by
-the Helm chart at `deploy/helm/deep-research`. For build/install steps see
+This document describes how the Deep Agent GA system is deployed to Kubernetes by
+the Helm chart at `deploy/helm/deep-agent-ga`. For build/install steps see
 [`deploy/README.md`](../../deploy/README.md).
 
 ## Topology

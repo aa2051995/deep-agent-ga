@@ -1,6 +1,6 @@
 # Lifecycle Timeline — `ui/src/App.tsx`
 
-A chronological account of the `App` component, anchored to React's actual phase ordering: **render → commit → layout effects → paint → passive effects → cleanup**. Effects are referenced by their numbers (E1–E16) from [ui-effects-table.md](ui-effects-table.md); `SH1` is the raw-SSE effect inside `useDeepResearchStream` (`stream.ts`).
+A chronological account of the `App` component, anchored to React's actual phase ordering: **render → commit → layout effects → paint → passive effects → cleanup**. Effects are referenced by their numbers (E1–E16) from [ui-effects-table.md](ui-effects-table.md); `SH1` is the raw-SSE effect inside `useDeepAgentGaStream` (`stream.ts`).
 
 ## Master timeline
 
@@ -17,7 +17,7 @@ sequenceDiagram
     Note over React,DOM: Phase 1 — FIRST RENDER (sync, no side effects)
     React->>React: useState initializers (threadId = URL/localStorage)
     React->>React: useRef initializers (threadIdRef = threadId)
-    React->>React: useDeepResearchStream() → useStream + debugEvents
+    React->>React: useDeepAgentGaStream() → useStream + debugEvents
     React->>React: assign switchThreadRef / joinRunStreamRef (in render body)
     React->>React: compute memos M1–M8 (all empty)
     React->>DOM: commit JSX, attach viewport/end refs
@@ -48,7 +48,7 @@ sequenceDiagram
 
 - **State is seeded.** The important one is `threadId = initialThreadId()`, which reads the `?thread_id=` URL param and falls back to `localStorage`. A returning user is already "on a thread" before anything loads. Everything else starts empty/idle (`runs=[]`, `currentRunId=null`, `runCheckpointSnapshots={}`, `visibleMessages=[]`).
 - **Refs are seeded.** `threadIdRef` is initialized to `threadId` (not null), while the DOM refs (`messagesViewportRef`, `messagesEndRef`) are still `null` — they only get real nodes at commit.
-- **The stream hook is instantiated.** `useDeepResearchStream` sets up its own `debugEvents` state and the SDK's `useStream`. Its effects are *registered* but do not run yet.
+- **The stream hook is instantiated.** `useDeepAgentGaStream` sets up its own `debugEvents` state and the SDK's `useStream`. Its effects are *registered* but do not run yet.
 - **Two refs are assigned during the render body** (not in an effect): `switchThreadRef.current = stream.switchThread` and `joinRunStreamRef.current = async (…)`. This is deliberate — they're refreshed on *every* render so effects always call the latest closure.
 - **Memos M1–M8 compute once** against empty inputs, yielding `displayedMessageEntries = []`.
 - **JSX returns** the sidebar + empty-state ("What should we research?") + composer. React commits this to the DOM and, during commit, populates the DOM refs.

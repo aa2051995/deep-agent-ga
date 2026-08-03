@@ -28,9 +28,9 @@ non-SDK fetches worked — the classic "loads but isn't connected" split.
 
 ## Related files
 
-- `ui/src/stream.ts` (`DEFAULT_API_URL`, `useDeepResearchStream`)
+- `ui/src/stream.ts` (`DEFAULT_API_URL`, `useDeepAgentGaStream`)
 - `ui/docker-entrypoint.sh` / `ui/public/config.js` (write `window.__API_URL__`)
-- `deploy/helm/deep-research` (`ui.apiUrl: "/api"`)
+- `deploy/helm/deep-agent-ga` (`ui.apiUrl: "/api"`)
 
 ## Solution
 
@@ -44,7 +44,7 @@ the dev server. Unit test: `ui/src/resolveApiUrl.test.ts`.
 ## Redeploy note
 
 `ui.image.tag: latest` with `pullPolicy: IfNotPresent` means nodes that already
-cached `uirepo:latest` will NOT pull the rebuilt image on a restart. After
+cached `deep-agent-ga-ui:latest` will NOT pull the rebuilt image on a restart. After
 rebuilding/pushing the UI image, either use an immutable tag (e.g. a git SHA) or
 set `ui.image.pullPolicy: Always`, then roll the deployment.
 

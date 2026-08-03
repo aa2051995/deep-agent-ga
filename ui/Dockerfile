@@ -14,12 +14,12 @@ RUN apk add --no-cache gettext
 
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf.template /etc/nginx/templates/default.conf.template
-COPY docker-entrypoint.sh /docker-entrypoint.d/40-deep-research-config.sh
-RUN chmod +x /docker-entrypoint.d/40-deep-research-config.sh
+COPY docker-entrypoint.sh /docker-entrypoint.d/40-deep-agent-ga-config.sh
+RUN chmod +x /docker-entrypoint.d/40-deep-agent-ga-config.sh
 
 # Same-origin by default: the browser calls /api/*, nginx proxies it to the
 # apiserver Service inside the cluster. Overridable via Helm values.
 ENV API_URL=/api \
-    APISERVER_UPSTREAM=http://deep-research-apiserver:8123
+    APISERVER_UPSTREAM=http://deep-agent-ga-apiserver:8123
 
 EXPOSE 8080

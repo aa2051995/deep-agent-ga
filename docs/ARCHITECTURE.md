@@ -1,8 +1,8 @@
-# Architecture Report — Deep Research Agent
+# Architecture Report — Deep Agent GA Agent
 
 ## Overview
 
-The repository is a **deep-research AI agent** built on the `deepagents` / LangGraph stack, packaged three different ways that coexist in the same tree:
+The repository is a **deep-agent-ga AI agent** built on the `deepagents` / LangGraph stack, packaged three different ways that coexist in the same tree:
 
 1. **A LangGraph-CLI deployable graph** (root `agent.py` + `langgraph.json`) — the canonical "example."
 2. **A custom streaming backend** (`stream-backend/`) — a bespoke FastAPI service that re-implements the LangGraph Platform HTTP/SSE/WebSocket protocol, adds Celery-based distributed execution, Postgres persistence, and a RabbitMQ Streams event bus. **This is the substantive system.**
@@ -18,7 +18,7 @@ There is also a Jupyter notebook (`research_agent.ipynb`) that is the original t
 |---|---|---|---|
 | LangGraph graph `research` | `agent.py` → `agent` | LangGraph deployment | Declared in `langgraph.json` and the `Dockerfile` `LANGSERVE_GRAPHS`. Built on `langchain/langgraph-api:3.11` base image. |
 | FastAPI ASGI app | `stream-backend/app/main.py` → `app` | HTTP/WS server | The custom streaming backend; run via uvicorn (default port 2024 per UI). |
-| Celery worker | `stream-backend/worker/celery_app.py` → `celery_app` | Background worker | `celery -A worker.celery_app worker --queues=deep-research-runs`, launched from `stream-backend/`. |
+| Celery worker | `stream-backend/worker/celery_app.py` → `celery_app` | Background worker | `celery -A worker.celery_app worker --queues=deep-agent-ga-runs`, launched from `stream-backend/`. |
 | React SPA | `ui/src/main.tsx` | Frontend | Vite dev server on port 5173. |
 | Notebook | `research_agent.ipynb` | Tutorial | Standalone interactive version. |
 
@@ -79,8 +79,8 @@ Note: `stream-backend/app/main.py:122-137` contains a hardcoded `set_env()` that
 ## 4. Workers & Background Jobs
 
 - **Celery tasks** (`tasks.py`):
-  - `deep_research.run_agent` — executes a run; `autoretry_for=(Exception,)`, `max_retries=1`, retry backoff.
-  - `deep_research.resume_agent` — resumes an interrupted/checkpointed run.
+  - `deep_agent_ga.run_agent` — executes a run; `autoretry_for=(Exception,)`, `max_retries=1`, retry backoff.
+  - `deep_agent_ga.resume_agent` — resumes an interrupted/checkpointed run.
   - Both wrap an async `execute_run_direct()` in a per-call event loop, with a `WorkerShutdownManager` handling SIGTERM/SIGINT graceful drain (10s) and cancellation.
   - **Failure propagation** — `ResearchDeepAgentRunner.run()`/`.resume()` mark the run `error`, persist a best-effort run snapshot (so the checkpoints endpoint still has data), emit a `failed` lifecycle event, and then **re-raise**. The re-raise is what stops `execute_run_direct` from falling through to `update_run_status(..., "success")`; without it a mid-stream failure (e.g. `GraphRecursionError`) was logged as failed yet saved as `success` with no snapshot.
   - **Deterministic errors are not retried** — `run_agent`/`resume_agent` keep `autoretry_for=(Exception,)` for transient infra hiccups, but catch `DETERMINISTIC_RUN_ERRORS` (`GraphRecursionError`, `ResearchRuntimeUnavailable`, pydantic `ValidationError`, `ValueError`/`TypeError`/`KeyError`/`AttributeError`/`IndexError`/`NotImplementedError`) and swallow them so autoretry never fires — retrying a deterministic failure would just burn another multi-minute run for the same result. The run is already persisted as `error` before the swallow.
@@ -218,7 +218,7 @@ Persistence of agent state happens twice: the backend writes its own `ThreadStat
 
 ## Deployment (Kubernetes / EKS)
 
-A Helm chart (`deploy/helm/deep-research`) deploys the full distributed stack to
+A Helm chart (`deploy/helm/deep-agent-ga`) deploys the full distributed stack to
 Kubernetes: Postgres and RabbitMQ (AMQP + Streams) as StatefulSets, and the
 apiserver, Celery worker, and React UI as autoscaled Deployments. The apiserver
 and worker share one backend image (`stream-backend/Dockerfile`); the UI image

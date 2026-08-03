@@ -1,10 +1,10 @@
-// Deep Research — CI/CD pipeline (Jenkins, in-cluster on EKS)
+// Deep Agent GA — CI/CD pipeline (Jenkins, in-cluster on EKS)
 // =============================================================================
 // Model (see deploy/cicd/README.md for the full setup):
-//   * Jenkins agents run as PODS on the EKS `deepres` cluster (Kubernetes plugin).
+//   * Jenkins agents run as PODS on the EKS `deep-agent-ga` cluster (Kubernetes plugin).
 //   * The agent pod's ServiceAccount `jenkins-agent` is IRSA-annotated with an
 //     IAM role that can PUSH to ECR (kaniko builds+pushes, no docker daemon).
-//   * The SAME ServiceAccount is granted in-cluster RBAC in the `deep-research`
+//   * The SAME ServiceAccount is granted in-cluster RBAC in the `deep-agent-ga`
 //     namespace, so `helm`/`kubectl` deploy using the pod's in-cluster config —
 //     no `aws eks update-kubeconfig`, no static kubeconfig.
 //
@@ -21,7 +21,7 @@ apiVersion: v1
 kind: Pod
 metadata:
   labels:
-    app: deep-research-ci
+    app: deep-agent-ga-ci
 spec:
   serviceAccountName: jenkins-agent   # IRSA (ECR push) + in-cluster RBAC (helm deploy)
   containers:
@@ -68,13 +68,13 @@ pipeline {
     APP_DIR      = 'examples/deep_research'
     REGISTRY     = '553138586148.dkr.ecr.us-east-1.amazonaws.com'
     REGION       = 'us-east-1'
-    CLUSTER      = 'deepres'
-    NAMESPACE    = 'deep-research'
-    RELEASE      = 'deep-research'
-    BACKEND_REPO = 'deepresrepo'   // apiserver + worker share this image
-    UI_REPO      = 'uirepo'
-    CHART        = 'examples/deep_research/deploy/helm/deep-research'
-    VALUES       = 'examples/deep_research/deploy/helm/deep-research/values-aws.yaml'
+    CLUSTER      = 'deep-agent-ga'
+    NAMESPACE    = 'deep-agent-ga'
+    RELEASE      = 'deep-agent-ga'
+    BACKEND_REPO = 'deep-agent-ga-backend'   // apiserver + worker share this image
+    UI_REPO      = 'deep-agent-ga-ui'
+    CHART        = 'examples/deep_research/deploy/helm/deep-agent-ga'
+    VALUES       = 'examples/deep_research/deploy/helm/deep-agent-ga/values-aws.yaml'
   }
 
   stages {
@@ -135,7 +135,7 @@ pipeline {
             pip install --quiet --no-cache-dir --break-system-packages pytest >/dev/null 2>&1 \
               || pip install --quiet --no-cache-dir pytest
             cd "${APP_DIR}"
-            python3 -m pytest deploy/helm/deep-research/tests -q
+            python3 -m pytest deploy/helm/deep-agent-ga/tests -q
           '''
         }
       }
@@ -160,8 +160,8 @@ pipeline {
           // (Alternative: pre-create a Secret and set secrets.existingSecret —
           //  see deploy/cicd/README.md.)
           withCredentials([
-            string(credentialsId: 'deep-research-tavily-api-key',    variable: 'TAVILY_API_KEY'),
-            string(credentialsId: 'deep-research-anthropic-api-key',  variable: 'ANTHROPIC_API_KEY')
+            string(credentialsId: 'deep-agent-ga-tavily-api-key',    variable: 'TAVILY_API_KEY'),
+            string(credentialsId: 'deep-agent-ga-anthropic-api-key',  variable: 'ANTHROPIC_API_KEY')
           ]) {
             sh '''
               set -eu

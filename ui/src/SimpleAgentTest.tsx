@@ -7,8 +7,8 @@ import type { BaseMessage } from "@langchain/core/messages";
 import type { AgentState } from "./simpleTypes";
 import { DEFAULT_API_URL } from "./stream";
 
-const SIMPLE_THREAD_KEY = "deep-research-ui:simple-thread";
-const SIMPLE_THREADS_KEY = "deep-research-ui:simple-threads";
+const SIMPLE_THREAD_KEY = "deep-agent-ga-ui:simple-thread";
+const SIMPLE_THREADS_KEY = "deep-agent-ga-ui:simple-threads";
 const ASSISTANT_ID = "deep-agent";
 const STREAM_MODES = ["messages-tuple", "values"] as const;
 const PRESETS = [
@@ -231,7 +231,7 @@ function ChatContainer({
     <main className="simple-chat">
       <header className="simple-chat-header">
         <div>
-          <h1>Deep Research</h1>
+          <h1>Deep Agent GA</h1>
           <span>Simple `useStream&lt;AgentState&gt;` test</span>
         </div>
       </header>
@@ -310,7 +310,7 @@ function ChatInput({
             onSubmit();
           }
         }}
-        placeholder="Message Deep Research..."
+        placeholder="Message Deep Agent GA..."
         rows={1}
       />
       <button disabled={!draft.trim() || disabled} type="submit" title="Send">

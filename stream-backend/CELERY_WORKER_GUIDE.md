@@ -3,7 +3,7 @@
 ## Problem Encountered
 
 ```
-KeyError: 'deep_research.run_agent'
+KeyError: 'deep_agent_ga.run_agent'
 ```
 
 Celery worker couldn't find the registered task because of import path issues.
@@ -41,7 +41,7 @@ from worker.celery_app import celery_app  # ✅ Absolute import
 cd stream-backend
 
 # Start the worker
-celery -A worker.celery_app worker --loglevel=info --queues=deep-research-runs
+celery -A worker.celery_app worker --loglevel=info --queues=deep-agent-ga-runs
 ```
 
 **Or using Python:**
@@ -68,8 +68,8 @@ celery -A worker.celery_app inspect registered
 **Expected output:**
 ```
 -> celery@HOSTNAME: OK
-    * deep_research.run_agent
-    * deep_research.resume_agent
+    * deep_agent_ga.run_agent
+    * deep_agent_ga.resume_agent
 ```
 
 ### Check Active Workers
@@ -103,13 +103,13 @@ stream-backend/           <-- START FROM HERE (pwd must be here)
 
 ## Common Issues
 
-### 1. KeyError: 'deep_research.run_agent'
+### 1. KeyError: 'deep_agent_ga.run_agent'
 
 **Cause:** Worker not finding task module
 **Fix:** 
 ```bash
 # Ensure you're in stream-backend directory
-pwd  # Should show: /path/to/deep-research/stream-backend
+pwd  # Should show: /path/to/deep-agent-ga/stream-backend
 
 # Start worker with absolute path
 celery -A worker.celery_app worker --loglevel=info
@@ -180,8 +180,8 @@ importing celery. Just restart the worker.
 
 **Alternatives** if you still hit pool issues on Windows, run a non-prefork pool:
 ```bash
-celery -A worker.celery_app worker --pool=solo --queues=deep-research-runs      # single task at a time
-celery -A worker.celery_app worker --pool=threads --concurrency=8 --queues=deep-research-runs  # concurrent, I/O-bound
+celery -A worker.celery_app worker --pool=solo --queues=deep-agent-ga-runs      # single task at a time
+celery -A worker.celery_app worker --pool=threads --concurrency=8 --queues=deep-agent-ga-runs  # concurrent, I/O-bound
 ```
 
 ### 7. `'DisabledBackend' object has no attribute '_get_task_meta_for'`
@@ -237,7 +237,7 @@ it started a **second** execution that raced the original, colliding on the
 export STREAM_BACKEND_CELERY_BROKER_URL="amqp://guest:guest@localhost:5672//"
 
 # Queue Name
-export STREAM_BACKEND_CELERY_QUEUE="deep-research-runs"
+export STREAM_BACKEND_CELERY_QUEUE="deep-agent-ga-runs"
 
 # Result Backend (optional)
 export STREAM_BACKEND_CELERY_RESULT_BACKEND="rpc://"
@@ -274,7 +274,7 @@ celery -A worker.celery_app worker
 celery -A worker.celery_app worker --loglevel=info
 
 # Specific queue
-celery -A worker.celery_app worker --queues=deep-research-runs
+celery -A worker.celery_app worker --queues=deep-agent-ga-runs
 
 # Concurrency
 celery -A worker.celery_app worker --concurrency=4
@@ -290,10 +290,10 @@ Removes tasks still waiting in the queue (already-running tasks are unaffected):
 ```bash
 cd stream-backend
 python -m worker.purge                    # purge the configured queue(s)
-python -m worker.purge deep-research-runs # or a specific queue name
+python -m worker.purge deep-agent-ga-runs # or a specific queue name
 
 # equivalently, the built-in celery command:
-celery -A worker.celery_app purge -f -Q deep-research-runs
+celery -A worker.celery_app purge -f -Q deep-agent-ga-runs
 ```
 
 ## Task acknowledgement
@@ -315,7 +315,7 @@ python -c "from worker.celery_app import celery_app; print(celery_app.tasks.keys
 
 **Expected output:**
 ```python
-dict_keys(['celery.backend_cleanup', 'deep_research.run_agent', 'deep_research.resume_agent'])
+dict_keys(['celery.backend_cleanup', 'deep_agent_ga.run_agent', 'deep_agent_ga.resume_agent'])
 ```
 
 ### Test Worker Connection
@@ -415,14 +415,14 @@ logging.basicConfig(level=logging.DEBUG)
 ```ini
 # /etc/systemd/system/celery-worker.service
 [Unit]
-Description=Celery Worker for Deep Research
+Description=Celery Worker for Deep Agent GA
 After=network.target
 
 [Service]
 Type=forking
 User=celery
 Group=celery
-WorkingDirectory=/path/to/deep-research/stream-backend
+WorkingDirectory=/path/to/deep-agent-ga/stream-backend
 Environment="STREAM_BACKEND_CELERY_BROKER_URL=amqp://guest:guest@localhost:5672//"
 ExecStart=/usr/bin/celery -A worker.celery_app worker --loglevel=info --logfile=/var/log/celery/worker.log
 Restart=always
@@ -445,8 +445,8 @@ CMD ["celery", "-A", "worker.celery_app", "worker", "--loglevel=info"]
 ```
 
 ```bash
-docker build -t deep-research-worker .
-docker run -d deep-research-worker
+docker build -t deep-agent-ga-worker .
+docker run -d deep-agent-ga-worker
 ```
 
 ## Quick Reference

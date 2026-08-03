@@ -271,7 +271,7 @@ async def execute_run_direct(
         await repo.close()
 
 
-@celery_app.task(name="deep_research.run_agent", bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 1})
+@celery_app.task(name="deep_agent_ga.run_agent", bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 1})
 def run_agent(self: Any, run_record: dict[str, Any], input_value: Any = None) -> None:
     run_id = run_record.get("run_id", "unknown")
     thread_id = run_record.get("thread_id", "unknown")
@@ -308,7 +308,7 @@ def run_agent(self: Any, run_record: dict[str, Any], input_value: Any = None) ->
         raise
 
 
-@celery_app.task(name="deep_research.resume_agent", bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 1})
+@celery_app.task(name="deep_agent_ga.resume_agent", bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 1})
 def resume_agent(self: Any, run_record: dict[str, Any], resume_value: Any = None) -> None:
     run_id = run_record.get("run_id", "unknown")
     thread_id = run_record.get("thread_id", "unknown")
@@ -389,6 +389,6 @@ async def recover_stale_runs() -> list[dict[str, Any]]:
 #         [
 #             "worker",
 #             "--loglevel=info",
-#             f"--queues={os.getenv('STREAM_BACKEND_CELERY_QUEUE', 'deep-research-runs')}",
+#             f"--queues={os.getenv('STREAM_BACKEND_CELERY_QUEUE', 'deep-agent-ga-runs')}",
 #         ]
 #     )

@@ -17,7 +17,7 @@ def purge_queues(queue_names: list[str] | None = None) -> int:
     from worker.celery_app import celery_app
 
     if not queue_names:
-        default_queue = os.getenv("STREAM_BACKEND_CELERY_QUEUE", "deep-research-runs")
+        default_queue = os.getenv("STREAM_BACKEND_CELERY_QUEUE", "deep-agent-ga-runs")
         # Dedupe while preserving order.
         queue_names = list(dict.fromkeys([default_queue, "celery"]))
 

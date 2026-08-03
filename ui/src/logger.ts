@@ -1,8 +1,8 @@
 type LogLevel = "debug" | "info" | "warn" | "error";
 export type LogMode = "stream" | "tokens" | "off" | "error" | "warn" | "info" | "debug";
 
-const STORAGE_KEY = "deep-research-ui:logging";
-const MODE_STORAGE_KEY = "deep-research-ui:log-mode";
+const STORAGE_KEY = "deep-agent-ga-ui:logging";
+const MODE_STORAGE_KEY = "deep-agent-ga-ui:log-mode";
 export const LOG_MODES: LogMode[] = ["stream", "tokens", "off", "error", "warn", "info", "debug"];
 const LEVEL_RANK: Record<LogLevel, number> = {
   debug: 10,
@@ -58,7 +58,7 @@ function write(level: LogLevel, step: string, data?: Record<string, unknown>, fo
     step,
     ...(data ?? {}),
   };
-  console[level]("[deep-research-ui]", payload);
+  console[level]("[deep-agent-ga-ui]", payload);
 }
 
 export const logger = {

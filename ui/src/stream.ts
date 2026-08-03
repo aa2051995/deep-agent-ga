@@ -14,7 +14,7 @@ export { DEFAULT_API_URL, defaultApiBase, resolveApiUrl } from "./apiUrl";
 
 export const ASSISTANT_ID = "deep-agent";
 
-export type DeepResearchState = {
+export type DeepAgentGaState = {
   messages: Message[];
   [key: string]: unknown;
 };
@@ -27,7 +27,7 @@ export type DebugEvent = {
   data: unknown;
 };
 
-export type DeepResearchStream = UseDeepAgentStream<DeepResearchState> & {
+export type DeepAgentGaStream = UseDeepAgentStream<DeepAgentGaState> & {
   debugEvents: DebugEvent[];
   clearDebugEvents: () => void;
 };
@@ -101,13 +101,13 @@ function protocolEventFromSse(frame: string): ProtocolEvent | null {
   return null;
 }
 
-export function useDeepResearchStream(
+export function useDeepAgentGaStream(
   apiUrl: string,
   threadId: string | null,
   onThreadId: (threadId: string) => void,
   onRunCreated?: (run: RunCallbackMeta) => void,
   assistantId: string = ASSISTANT_ID,
-): DeepResearchStream {
+): DeepAgentGaStream {
   const [debugEvents, setDebugEvents] = useState<DebugEvent[]>([]);
   // logger.debug("stream.hook.render", { apiUrl, threadId });
 
@@ -312,7 +312,7 @@ export function useDeepResearchStream(
     },
   };
 
-  const stream = useStream(streamOptions as never) as unknown as UseDeepAgentStream<DeepResearchState>;
+  const stream = useStream(streamOptions as never) as unknown as UseDeepAgentStream<DeepAgentGaState>;
 
   return useMemo(
     () => {
@@ -328,7 +328,7 @@ export function useDeepResearchStream(
           logger.info("stream.debug.clear");
           setDebugEvents([]);
         },
-      } as DeepResearchStream;
+      } as DeepAgentGaStream;
       // logger.debug("stream.normalized", {
       //   messages: normalized.messages.length,
       //   toolCalls: normalized.toolCalls.length,

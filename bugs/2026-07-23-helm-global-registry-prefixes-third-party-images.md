@@ -1,11 +1,11 @@
 # Helm: global.imageRegistry wrongly redirected postgres/rabbitmq to the app registry
 
 **Date:** 2026-07-23
-**Area:** Helm chart image resolution (`deploy/helm/deep-research`)
+**Area:** Helm chart image resolution (`deploy/helm/deep-agent-ga`)
 
 ## Root cause
 
-The `deep-research.image` helper prefixed **every** image with
+The `deep-agent-ga.image` helper prefixed **every** image with
 `global.imageRegistry`, including the third-party `postgres` and `rabbitmq`
 images. Setting `global.imageRegistry` to a private ECR (so the app images pull
 from ECR) also rewrote:
@@ -20,18 +20,18 @@ pull (`ImagePullBackOff`) and the whole stack would never come up.
 
 ## Related files
 
-- `deploy/helm/deep-research/templates/_helpers.tpl` (`deep-research.image`)
-- `deploy/helm/deep-research/templates/{apiserver,worker,ui,postgres,rabbitmq}.yaml`
-- `deploy/helm/deep-research/values.yaml`
+- `deploy/helm/deep-agent-ga/templates/_helpers.tpl` (`deep-agent-ga.image`)
+- `deploy/helm/deep-agent-ga/templates/{apiserver,worker,ui,postgres,rabbitmq}.yaml`
+- `deploy/helm/deep-agent-ga/values.yaml`
 
 ## Solution
 
 Split the helper in two:
 
-- `deep-research.appImage` — used by apiserver/worker/ui; applies
+- `deep-agent-ga.appImage` — used by apiserver/worker/ui; applies
   `global.imageRegistry` (or a per-image `registry`). These live in the user's
   registry.
-- `deep-research.image` — used by postgres/rabbitmq; ignores
+- `deep-agent-ga.image` — used by postgres/rabbitmq; ignores
   `global.imageRegistry` and pulls from Docker Hub, with an optional per-image
   `registry` for teams that mirror via an ECR pull-through cache.
 

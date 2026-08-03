@@ -92,7 +92,7 @@ def configure_logging() -> None:
     handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(formatter)
     handler.terminator = ""
-    default_log_file = Path(tempfile.gettempdir()) / "deep-research-stream-backend.log"
+    default_log_file = Path(tempfile.gettempdir()) / "deep-agent-ga-stream-backend.log"
     log_file = Path(os.getenv("STREAM_BACKEND_LOG_FILE", str(default_log_file)))
     log_file.parent.mkdir(parents=True, exist_ok=True)
     file_handler = logging.FileHandler(log_file, encoding="utf-8")
@@ -137,7 +137,7 @@ def set_env():
     os.environ.setdefault("GOOGLE_API_KEY", "AIzaSyBx0JdmhyXdoufg23j2Ec69ej968-LSymU")  # --- IGNORE ---
     os.environ.setdefault("STREAM_BACKEND_EVENT_BROKER", "rabbitmq")
     os.environ.setdefault("RABBITMQ_STREAM_URL", "rabbitmq-stream://guest:guest@127.0.0.1:5552/")
-    os.environ.setdefault("STREAM_BACKEND_CELERY_QUEUE", "deep-research-runs")
+    os.environ.setdefault("STREAM_BACKEND_CELERY_QUEUE", "deep-agent-ga-runs")
     os.environ.setdefault("STREAM_BACKEND_ASSISTANT_STORE", "pg")
     # Celery's terminate=True requires a worker pool that can kill a running
     # slot (prefork, via SIGTERM/SIGKILL to a child process). This project's

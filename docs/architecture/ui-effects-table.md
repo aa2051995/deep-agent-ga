@@ -1,6 +1,6 @@
 # useEffect Reference — `ui/src/App.tsx`
 
-Every effect in `App`, numbered E1–E16 in source order, plus **E2b** (added alongside E2 to retain per-run subagent cards; not renumbered into the E1–E16 sequence to avoid relabeling every later effect). **E3 is a `useLayoutEffect`**; the rest are `useEffect`. The custom hook `useDeepResearchStream` (`stream.ts`) adds one more effect, listed in the appendix.
+Every effect in `App`, numbered E1–E16 in source order, plus **E2b** (added alongside E2 to retain per-run subagent cards; not renumbered into the E1–E16 sequence to avoid relabeling every later effect). **E3 is a `useLayoutEffect`**; the rest are `useEffect`. The custom hook `useDeepAgentGaStream` (`stream.ts`) adds one more effect, listed in the appendix.
 
 ## Table 1 — Behavior
 
@@ -65,7 +65,7 @@ Every effect in `App`, numbered E1–E16 in source order, plus **E2b** (added al
 
 ---
 
-## Appendix — `useDeepResearchStream` (stream.ts) effect
+## Appendix — `useDeepAgentGaStream` (stream.ts) effect
 
 | # | Purpose | Dependencies | When | Changes | Network? | State? | Loops | Races |
 |---|---|---|---|---|---|---|---|---|
