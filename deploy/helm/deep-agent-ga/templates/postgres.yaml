@@ -52,7 +52,7 @@ spec:
             - name: POSTGRES_USER
               value: {{ .Values.postgres.auth.username | quote }}
             - name: POSTGRES_PASSWORD
-              value: {{ .Values.postgres.auth.password | quote }}
+              value: {{ include "deep-agent-ga.postgres.password" . | quote }}
             - name: POSTGRES_DB
               value: {{ .Values.postgres.auth.database | quote }}
             # Keep data in a subdir so a fresh EBS volume's lost+found doesn't

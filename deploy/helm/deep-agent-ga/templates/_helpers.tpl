@@ -161,12 +161,23 @@ existing/edited assistants are never overwritten on restart.
 {{/* ---------------------------------------------------------------------------
 Connection strings (used by apiserver + worker). External endpoints win; otherwise
 point at the in-cluster Services.
+
+Passwords are deliberately NOT defaulted for production value files: an empty
+one fails the render here with an actionable message instead of shipping a
+guessable credential or a Postgres container that refuses to initialise.
 --------------------------------------------------------------------------- */}}
+{{- define "deep-agent-ga.postgres.password" -}}
+{{- required "postgres.auth.password is required. Set it at install time (--set-string postgres.auth.password=$POSTGRES_PASSWORD) or use postgres.external.enabled with a connectionUrl." .Values.postgres.auth.password -}}
+{{- end -}}
+
+{{- define "deep-agent-ga.rabbitmq.password" -}}
+{{- required "rabbitmq.auth.password is required. Set it at install time (--set-string rabbitmq.auth.password=$RABBITMQ_PASSWORD) or use rabbitmq.external.enabled with amqpUrl/streamUrl." .Values.rabbitmq.auth.password -}}
+{{- end -}}
 {{- define "deep-agent-ga.postgresUri" -}}
 {{- if .Values.postgres.external.enabled -}}
 {{- .Values.postgres.external.connectionUrl -}}
 {{- else -}}
-{{- printf "postgresql://%s:%s@%s:%v/%s" .Values.postgres.auth.username .Values.postgres.auth.password (include "deep-agent-ga.postgres.fullname" .) .Values.postgres.service.port .Values.postgres.auth.database -}}
+{{- printf "postgresql://%s:%s@%s:%v/%s" .Values.postgres.auth.username (include "deep-agent-ga.postgres.password" .) (include "deep-agent-ga.postgres.fullname" .) .Values.postgres.service.port .Values.postgres.auth.database -}}
 {{- end -}}
 {{- end -}}
 
@@ -174,7 +185,7 @@ point at the in-cluster Services.
 {{- if .Values.rabbitmq.external.enabled -}}
 {{- .Values.rabbitmq.external.amqpUrl -}}
 {{- else -}}
-{{- printf "amqp://%s:%s@%s:%v//" .Values.rabbitmq.auth.username .Values.rabbitmq.auth.password (include "deep-agent-ga.rabbitmq.fullname" .) .Values.rabbitmq.ports.amqp -}}
+{{- printf "amqp://%s:%s@%s:%v//" .Values.rabbitmq.auth.username (include "deep-agent-ga.rabbitmq.password" .) (include "deep-agent-ga.rabbitmq.fullname" .) .Values.rabbitmq.ports.amqp -}}
 {{- end -}}
 {{- end -}}
 
@@ -182,7 +193,7 @@ point at the in-cluster Services.
 {{- if .Values.rabbitmq.external.enabled -}}
 {{- .Values.rabbitmq.external.streamUrl -}}
 {{- else -}}
-{{- printf "rabbitmq-stream://%s:%s@%s:%v/" .Values.rabbitmq.auth.username .Values.rabbitmq.auth.password (include "deep-agent-ga.rabbitmq.fullname" .) .Values.rabbitmq.ports.stream -}}
+{{- printf "rabbitmq-stream://%s:%s@%s:%v/" .Values.rabbitmq.auth.username (include "deep-agent-ga.rabbitmq.password" .) (include "deep-agent-ga.rabbitmq.fullname" .) .Values.rabbitmq.ports.stream -}}
 {{- end -}}
 {{- end -}}
 

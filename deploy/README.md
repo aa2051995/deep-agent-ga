@@ -73,7 +73,7 @@ step 2, pinning `image.tag=<git-sha>`.
 ## 1. Build & push images
 
 ```bash
-export REGISTRY=553138586148.dkr.ecr.us-east-1.amazonaws.com
+export REGISTRY=<AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com
 export REGION=us-east-1
 aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $REGISTRY
 

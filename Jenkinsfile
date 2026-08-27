@@ -66,7 +66,7 @@ pipeline {
 
   environment {
     APP_DIR      = 'examples/deep_research'
-    REGISTRY     = '553138586148.dkr.ecr.us-east-1.amazonaws.com'
+    REGISTRY     = '<AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com'
     REGION       = 'us-east-1'
     CLUSTER      = 'deep-agent-ga'
     NAMESPACE    = 'deep-agent-ga'

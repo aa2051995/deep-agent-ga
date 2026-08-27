@@ -9,7 +9,7 @@ global:
   # Registry prefix for the APP images only (apiserver / worker / ui) — e.g. your
   # ECR. It is NOT applied to postgres/rabbitmq (those pull from Docker Hub; set
   # their own `image.registry` if you mirror them).
-  imageRegistry: ""          # e.g. 553138586148.dkr.ecr.us-east-1.amazonaws.com
+  imageRegistry: ""          # e.g. 111122223333.dkr.ecr.us-east-1.amazonaws.com
   imagePullSecrets: []       # e.g. [{ name: ecr-creds }]  (not needed when the node role has ECR read)
 
 nameOverride: ""
@@ -124,7 +124,10 @@ postgres:
 
   auth:
     username: postgres
-    password: postgres       # override in production (or use secrets/external RDS)
+    # Local/dev default only. Production value files (values-aws.yaml) leave this
+    # empty, which makes the chart FAIL to render until you pass a real one:
+    #   --set-string postgres.auth.password="$POSTGRES_PASSWORD"
+    password: postgres
     database: deepresearch
 
   service:
@@ -162,7 +165,8 @@ rabbitmq:
 
   auth:
     username: guest
-    password: guest          # override in production
+    # Local/dev default only — same rule as postgres.auth.password above.
+    password: guest
 
   ports:
     amqp: 5672

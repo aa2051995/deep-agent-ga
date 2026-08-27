@@ -133,7 +133,7 @@ def test_global_registry_only_prefixes_app_images():
     it would redirect those to a registry that doesn't host them.
     """
     manifests = _render(
-        "--set", "global.imageRegistry=553138586148.dkr.ecr.us-east-1.amazonaws.com",
+        "--set", "global.imageRegistry=111122223333.dkr.ecr.us-east-1.amazonaws.com",
         "--set", "apiserver.image.repository=deep-agent-ga-backend",
         "--set", "worker.image.repository=deep-agent-ga-backend",
         "--set", "ui.image.repository=deep-agent-ga-ui",
@@ -142,7 +142,7 @@ def test_global_registry_only_prefixes_app_images():
     def image_of(kind, component):
         return _by(manifests, kind, component)["spec"]["template"]["spec"]["containers"][0]["image"]
 
-    reg = "553138586148.dkr.ecr.us-east-1.amazonaws.com"
+    reg = "111122223333.dkr.ecr.us-east-1.amazonaws.com"
     assert image_of("Deployment", "apiserver") == f"{reg}/deep-agent-ga-backend:latest"
     assert image_of("Deployment", "worker") == f"{reg}/deep-agent-ga-backend:latest"
     assert image_of("Deployment", "ui") == f"{reg}/deep-agent-ga-ui:latest"

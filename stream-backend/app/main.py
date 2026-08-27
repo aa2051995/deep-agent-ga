@@ -35,6 +35,7 @@ from .models import (
     now_iso,
 )
 from .assistant_api import router as assistant_router
+from .settings import configure, log_configuration
 from .event_bus import EventBrokerUnavailable, PublishingRepository, create_event_broker
 from .projections import project_run_checkpoints, project_subagents
 from .protocol import matches_subscription, sse_frame
@@ -86,6 +87,7 @@ class BackendFormatter(logging.Formatter):
 
 
 def configure_logging() -> None:
+    configure()  # .env + defaults must land before log level/color are read
     level = os.getenv("STREAM_BACKEND_LOG_LEVEL", "INFO").upper()
     use_color = os.getenv("STREAM_BACKEND_LOG_COLOR", "true").lower() not in {"0", "false", "no"}
     formatter = BackendFormatter(use_color=use_color)
@@ -123,33 +125,22 @@ app.add_middleware(
 )
 app.include_router(assistant_router)
 def set_env():
-    os.environ.setdefault("STREAM_BACKEND_STORE", "postgres")  # --- IGNORE ---
-    os.environ.setdefault("STREAM_BACKEND_TEST_AGENT", "false")  # --- IGNORE ---
-    # os.environ.setdefault("STREAM_BACKEND_AGENT_MODE", "fixture")  # --- IGNORE ---
-    os.environ.setdefault("STREAM_BACKEND_POSTGRES_URI", "postgresql://postgres:am12345Eee@localhost:5432/myapp")  # --- IGNORE ---
-    os.environ.setdefault("RESEARCH_AGENT_PROVIDER", "bedrock")
-    os.environ.setdefault("RESEARCH_AGENT_MODEL", "moonshotai.kimi-k2.5")
-    os.environ.setdefault("AWS_REGION", "eu-north-1")
-    os.environ.setdefault("AWS_BEDROCK_PROFILE", "my-profile")
-    os.environ.setdefault("STREAM_BACKEND_RUNNER_BACKEND", "celery")  # "celery" schedules on the worker; "asyncio" runs in-process
-    os.environ.setdefault("STREAM_BACKEND_CELERY_BROKER_URL", "amqp://guest:guest@localhost:5672//")
-    os.environ.setdefault("TAVILY_API_KEY", "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")
-    os.environ.setdefault("GOOGLE_API_KEY", "AIzaSyBx0JdmhyXdoufg23j2Ec69ej968-LSymU")  # --- IGNORE ---
-    os.environ.setdefault("STREAM_BACKEND_EVENT_BROKER", "rabbitmq")
-    os.environ.setdefault("RABBITMQ_STREAM_URL", "rabbitmq-stream://guest:guest@127.0.0.1:5552/")
-    os.environ.setdefault("STREAM_BACKEND_CELERY_QUEUE", "deep-agent-ga-runs")
-    os.environ.setdefault("STREAM_BACKEND_ASSISTANT_STORE", "pg")
-    # Celery's terminate=True requires a worker pool that can kill a running
-    # slot (prefork, via SIGTERM/SIGKILL to a child process). This project's
-    # worker guide recommends --pool=threads/--pool=solo on Windows (no
-    # fork()), and Python threads cannot be killed from outside — Celery's
-    # thread pool does not implement kill_job, so terminate=True there raises
-    # NotImplementedError inside the worker's pidbox handler ("pidbox command
-    # error") without actually stopping the task. Actual in-progress
-    # cancellation now goes through research_runtime's cooperative
-    # cancel_requested poll instead (see RunCancelled). Default this to false;
-    # only set it true if the worker actually runs --pool=prefork.
-    os.environ.setdefault("STREAM_BACKEND_CELERY_TERMINATE_ON_CANCEL", "false")
+    """Load configuration from the environment / .env and apply safe defaults.
+
+    All credentials (API keys, DSNs, broker URLs) come from the environment or
+    a git-ignored ``.env`` — see `app/settings.py` and `.env.example`. Nothing
+    secret is baked into the source; `configure()` only fills in non-secret
+    operational defaults, so an unconfigured checkout still boots in the
+    single-process in-memory mode instead of silently using someone's keys.
+
+    Kept as a function (and called at import) so `worker/tasks.py` can invoke
+    the exact same bootstrap.
+    """
+    settings = configure()
+    log_configuration(settings)
+    return settings
+
+
 set_env()
 def create_repository():
    

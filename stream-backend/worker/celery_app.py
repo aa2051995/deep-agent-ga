@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import os
 
+from app.settings import configure as configure_settings
 from worker.asyncio_policy import (
     configure_windows_celery_env,
     configure_windows_event_loop_policy,
 )
+
+# Load .env + non-secret defaults BEFORE any os.getenv below. `celery -A
+# worker.celery_app` imports this module first, so without this the broker URL
+# and queue name would be read before worker.tasks gets a chance to bootstrap.
+configure_settings()
 
 # Must run BEFORE importing celery/billiard: on Windows the spawned prefork
 # workers otherwise crash every task with "not enough values to unpack

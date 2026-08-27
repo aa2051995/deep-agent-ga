@@ -2,7 +2,9 @@
 #   helm upgrade --install deep-agent-ga deploy/helm/deep-agent-ga \
 #     -n deep-agent-ga --create-namespace \
 #     -f deploy/helm/deep-agent-ga/values-aws.yaml \
-#     --set-string secrets.tavilyApiKey=$TAVILY_API_KEY
+#     --set-string secrets.tavilyApiKey="$TAVILY_API_KEY" \
+#     --set-string postgres.auth.password="$POSTGRES_PASSWORD" \
+#     --set-string rabbitmq.auth.password="$RABBITMQ_PASSWORD"
 #
 # Prereqs on the cluster:
 #   - EBS CSI driver + a StorageClass named "ebs-gp3" (see ../../ebs-gp3-storageclass.yaml)
@@ -12,7 +14,7 @@
 global:
   # App-image registry (apiserver/worker/ui only). Push images here first
   # (see deploy/README.md). postgres/rabbitmq still pull from Docker Hub.
-  imageRegistry: 553138586148.dkr.ecr.us-east-1.amazonaws.com
+  imageRegistry: "<AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com"
 
 app:
   # Fallback model only — real runs use each assistant's own model/provider.
@@ -38,7 +40,7 @@ serviceAccount:
   # name: deep-agent-ga
   annotations:
     # IAM role (IRSA) granting bedrock:InvokeModel* — create with eksctl/iam.
-    # eks.amazonaws.com/role-arn: arn:aws:iam::553138586148:role/deep-agent-ga-bedrock
+    # eks.amazonaws.com/role-arn: arn:aws:iam::<AWS_ACCOUNT_ID>:role/deep-agent-ga-bedrock
 
 postgres:
   # Swap to an external RDS instance in production instead of the in-cluster DB:
@@ -49,14 +51,19 @@ postgres:
     storageClassName: ebs-gp3
     size: 20Gi
   auth:
-    password: "am12345Eee"
+    # Never commit a real password. Pass it at install time, e.g.
+    #   --set-string postgres.auth.password="$POSTGRES_PASSWORD"
+    # or point postgres.external.connectionUrl at RDS and disable this chart's DB.
+    password: ""
 
 rabbitmq:
   persistence:
     storageClassName: ebs-gp3
     size: 10Gi
   auth:
-    password: "guest"
+    # Never commit a real password. Pass it at install time, e.g.
+    #   --set-string rabbitmq.auth.password="$RABBITMQ_PASSWORD"
+    password: ""
 
 apiserver:
   image:

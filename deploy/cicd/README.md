@@ -62,7 +62,7 @@ eksctl create iamserviceaccount \
   --cluster deep-agent-ga --region us-east-1 \
   --namespace jenkins --name jenkins-agent \
   --role-name deep-agent-ga-jenkins-agent \
-  --attach-policy-arn arn:aws:iam::553138586148:policy/DeepAgentGaJenkinsEcrPush \
+  --attach-policy-arn arn:aws:iam::<AWS_ACCOUNT_ID>:policy/DeepAgentGaJenkinsEcrPush \
   --approve
 ```
 > If your Jenkins agents run in a namespace other than `jenkins`, use it in both

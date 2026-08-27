@@ -1,7 +1,7 @@
 images:
   apiServerImage:
     pullPolicy: IfNotPresent
-    repository: 553138586148.dkr.ecr.eu-north-1.amazonaws.com/deep-agent-ga
+    repository: 111122223333.dkr.ecr.eu-north-1.amazonaws.com/deep-agent-ga
     tag: latest
 # Example configuration for low reads, high writes (5 read/500 write requests per second)
 api:

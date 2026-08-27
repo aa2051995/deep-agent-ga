@@ -1,0 +1,58 @@
+# ---------------------------------------------------------------------------
+# Secrets — never commit these. Only .env.example (the template) is tracked.
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+!global-bundle.pem          # AWS RDS public CA bundle — not a secret
+*.key
+*.p12
+*.pfx
+credentials
+kubeconfig
+.aws/
+
+# Shell/session dumps: these routinely capture pasted API keys and account ids.
+history.txt
+history*.txt
+*.history
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.langgraph_api/
+
+# ---------------------------------------------------------------------------
+# Node / frontend
+# ---------------------------------------------------------------------------
+node_modules/
+ui/dist/
+*.tsbuildinfo
+
+# ---------------------------------------------------------------------------
+# Editors & OS
+# ---------------------------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ---------------------------------------------------------------------------
+# Local scratch
+# ---------------------------------------------------------------------------
+*.log
+.helm-render/

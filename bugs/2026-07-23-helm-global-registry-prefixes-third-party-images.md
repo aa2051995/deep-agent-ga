@@ -11,8 +11,8 @@ images. Setting `global.imageRegistry` to a private ECR (so the app images pull
 from ECR) also rewrote:
 
 ```
-postgres:16-alpine          -> 553138586148.dkr.ecr.us-east-1.amazonaws.com/postgres:16-alpine
-rabbitmq:3.13-management    -> 553138586148.dkr.ecr.us-east-1.amazonaws.com/rabbitmq:3.13-management
+postgres:16-alpine          -> <AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/postgres:16-alpine
+rabbitmq:3.13-management    -> <AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/rabbitmq:3.13-management
 ```
 
 Those images do not exist in the user's ECR, so both StatefulSets would fail to

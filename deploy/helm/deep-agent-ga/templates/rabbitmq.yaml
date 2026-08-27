@@ -86,7 +86,7 @@ spec:
             - name: RABBITMQ_DEFAULT_USER
               value: {{ .Values.rabbitmq.auth.username | quote }}
             - name: RABBITMQ_DEFAULT_PASS
-              value: {{ .Values.rabbitmq.auth.password | quote }}
+              value: {{ include "deep-agent-ga.rabbitmq.password" . | quote }}
           readinessProbe:
             exec:
               command: ["rabbitmq-diagnostics", "-q", "check_port_connectivity"]
